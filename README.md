@@ -29,7 +29,7 @@ The parameters and their meanings are
   - `0` stands for random split
   - `1` stands for gene split 1
   - `2` stands for gene split 2
- - `-p, --predict, default=0`, which set of triplets to predict on. 
+- `-p, --predict, default=0`, which set of triplets to predict on. 
   - `0` stands for predicting on the original set of triplets (set 1 in the paper)
   - `1` stands for predicting on the set of triplets where all three genes are observed in the original dataset (set 2 in the paper)
   - `2` stands for predicting on the set of triplets where two of the genes are observed and the thir gene is unobserved in the original dataset
