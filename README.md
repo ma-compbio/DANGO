@@ -48,12 +48,11 @@ The parameters and their meanings are
 	ckpt_list = list(torch.load("../Temp/%s/Experiment_model_list" % (dir_name), map_location='cpu'))
 	dango_list = create_dango_list(ckpt_list)
 	```
-	3. If the model runs in the random 5-fold CV (`--mode=eval`, `--split=0`), the predicted results for each fold would be stored in a hdf5 file named as `Experiment.hdf5`. 	The structure of this hdf5 file is
-	 ```
-	  ./Cross_valid_0
-	    ./ensemble_inverse
-	    ./test_y_inverse
-	   ./Cross_valid_1
-	 ```
-	 The `ensemble_inverse` and `test_y_inverse` correspond to the predicted scores and measured scores. They are both inversely transformed to the original value scale of the measured trigenic interaction scores.
-	 4. If the `--mode` parameter include `predict`, the corresponding results would be stored as `XX_tuples.npy`, `XX_y.npy`. Only tuples with predicted signals larger than 0.05 are kept to save space. Based on the `--predict` parameter, `XX`is named as `re_eval`, `within_seen`, `two_seen_one_unseen` respectively.
+	3. If the model runs in the random 5-fold CV (`--mode=eval`, `--split=0`), the predicted results for each fold would be stored in a hdf5 file named as `Experiment.hdf5`. 	The structure of this hdf5 file is listed. The `ensemble_inverse` and `test_y_inverse` correspond to the predicted scores and measured scores. They are both inversely transformed to the original value scale of the measured trigenic interaction scores.
+	```
+	./Cross_valid_0
+		./ensemble_inverse
+		./test_y_inverse
+	./Cross_valid_1
+	```
+	4. If the `--mode` parameter include `predict`, the corresponding results would be stored as `XX_tuples.npy`, `XX_y.npy`. Only tuples with predicted signals larger than 0.05 are kept to save space. Based on the `--predict` parameter, `XX`is named as `re_eval`, `within_seen`, `two_seen_one_unseen` respectively.
