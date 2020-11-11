@@ -56,3 +56,6 @@ The parameters and their meanings are
 	./Cross_valid_1
 	```
 	4. If the `--mode` parameter include `predict`, the corresponding results would be stored as `XX_tuples.npy`, `XX_y.npy`. Only tuples with predicted signals larger than 0.05 are kept to save space. Based on the `--predict` parameter, `XX`is named as `re_eval`, `within_seen`, `two_seen_one_unseen` respectively.
+	
+## Cite
+
