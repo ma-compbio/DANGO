@@ -7,8 +7,7 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import KFold, train_test_split
 import datetime
 import h5py
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from xgboost import XGBRegressor, XGBClassifier
+
 import subprocess
 import argparse
 from itertools import combinations
@@ -18,7 +17,6 @@ import shutil
 
 def parse_args():
 	parser = argparse.ArgumentParser(description="Higashi main program")
-	parser.add_argument('-e', '--extra', type=str, default="")
 	parser.add_argument('-t', '--thread', type=int, default=8)
 	parser.add_argument('-m', '--mode', type=str, default='train')
 	parser.add_argument('-i', '--identifier', type=str, default=None)
@@ -57,7 +55,8 @@ def id2baselinevecs(vecs, ids):
 
 
 def baseline(train_data, train_y, test_data, test_y):
-	
+	from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+	from xgboost import XGBRegressor, XGBClassifier
 
 	print ("start baseline")
 	baseline_vec = np.load("../data/embeddings.npy")
@@ -152,11 +151,17 @@ def random_cv_nn_experiments(n_fold=5, rounds=10):
 		ensemble /= finish_count
 		
 		
-		print("ensemble")
-		print(correlation_cuda(test_y, ensemble))
+		print("ensemble at Fold %d" % cv_count)
+		corr1, corr2 = correlation_cuda(test_y, ensemble)
 		pos_mask = test_y >= positive_thres
-		print(correlation_cuda(test_y[pos_mask], ensemble[pos_mask]))
-		print(roc_auc_cuda(pos_mask, ensemble, balance=True))
+		corr1_pos, corr2_pos = correlation_cuda(test_y[pos_mask], ensemble[pos_mask])
+		roc, aupr = roc_auc_cuda(pos_mask, ensemble, balance=True)
+		print("Pearson, Spearman")
+		print(corr1, corr2)
+		print("Pearson_strong, Spearman_strong")
+		print(corr1_pos, corr2_pos)
+		print("AUC, AUPR")
+		print(roc, aupr)
 		
 		corr1, corr2 = correlation_cuda(test_y, ensemble)
 		pos_mask = test_y >= positive_thres
@@ -249,8 +254,11 @@ def gene_split_nn_experiments(rounds=10,n_genes=40, strict=False):
 	pos_mask = test_y >= positive_thres
 	corr1_pos, corr2_pos = correlation_cuda(test_y[pos_mask], ensemble[pos_mask])
 	roc, aupr = roc_auc_cuda(pos_mask, ensemble, balance=True)
+	print ("Pearson, Spearman")
 	print (corr1, corr2)
+	print("Pearson_strong, Spearman_strong")
 	print (corr1_pos, corr2_pos)
+	print ("AUC, AUPR")
 	print (roc, aupr)
 	result_file.write("gene split")
 	for score in [corr1, corr2, corr1_pos, corr2_pos, roc, aupr]:
@@ -288,7 +296,7 @@ def whole_dataset_train(rounds=10):
 	return
 
 
-def create_hypersagnn_list(ckpt_list):
+def create_dango_list(ckpt_list):
 	# This is building the adjacency matrix for the GCN
 	auxi_m = [np.load("../data/%s" % name) for name in
 	          ['coexpression.npy', 'experimental.npy',
@@ -304,30 +312,30 @@ def create_hypersagnn_list(ckpt_list):
 	auxi_m = new_auxi_m
 	auxi_adj = [torch.from_numpy(build_adj_matrix(x, gene_num)).float().to(device) for x in auxi_m]
 	
-	hyper_sagnn_list = []
+	dango_list = []
 	
 	for checkpoint in ckpt_list:
 		graphsage_embedding, recon_nn, node_embedding, hypersagnn = get_model(gene_num, embed_dim, auxi_m, auxi_adj)
 		hypersagnn.load_state_dict(checkpoint['model_link'])
 		hypersagnn.node_embedding.off_hook(np.arange(1, gene_num), gene_num)
 		del graphsage_embedding
-		hyper_sagnn_list.append(hypersagnn)
+		dango_list.append(hypersagnn)
 
-	return hyper_sagnn_list
+	return dango_list
 
 
-def ensemble_predict(hyper_sagnn_list, chunks):
+def ensemble_predict(dango_list, chunks):
 	ensemble = 0
-	for hypersagnn in hyper_sagnn_list:
+	for hypersagnn in dango_list:
 		pred = hypersagnn.predict(chunks, verbose=True, batch_size=4800)
 		ensemble += pred.detach().cpu().numpy()
 	
-	ensemble /= len(hyper_sagnn_list)
+	ensemble /= len(dango_list)
 	pred_y = scalar.inverse_transform(ensemble.reshape((-1, 1))).reshape((-1))
 	return pred_y
 
 # all combinations of seen genes
-def within_seen_genes(pos_tuple_list, hyper_sagnn_list):
+def within_seen_genes(pos_tuple_list, dango_list):
 	seen_genes = np.unique(pos_tuple_list.reshape((-1)))
 	seen_genes = np.sort(seen_genes)
 	print (len(seen_genes), seen_genes)
@@ -348,7 +356,7 @@ def within_seen_genes(pos_tuple_list, hyper_sagnn_list):
 			print ("finish %d of %d" %(finish,total))
 			chunks = torch.from_numpy(chunks).long().to(device)
 			
-			pred_y = ensemble_predict(hyper_sagnn_list, chunks)
+			pred_y = ensemble_predict(dango_list, chunks)
 			
 			selected = pred_y >= kept_thresh
 			select_chunks, select_pred = chunks[selected].detach().cpu().numpy(), pred_y[selected]
@@ -364,7 +372,7 @@ def within_seen_genes(pos_tuple_list, hyper_sagnn_list):
 		
 	chunks = np.array(chunks)
 	chunks = torch.from_numpy(chunks).long().to(device)
-	pred_y = ensemble_predict(hyper_sagnn_list, chunks)
+	pred_y = ensemble_predict(dango_list, chunks)
 	
 	selected = pred_y >= kept_thresh
 	select_chunks, select_pred = chunks[selected].detach().cpu().numpy(), pred_y[selected]
@@ -379,7 +387,7 @@ def within_seen_genes(pos_tuple_list, hyper_sagnn_list):
 	np.save("../Temp/%s/within_seen_y.npy"  % datetime_object, final_y)
 
 # combinatioins of two seen genes and one unseen
-def two_seen_one_unseen_genes(pos_tuple_list, hyper_sagnn_list):
+def two_seen_one_unseen_genes(pos_tuple_list, dango_list):
 	seen_genes = np.unique(pos_tuple_list.reshape((-1)))
 	seen_genes = np.sort(seen_genes)
 	print(len(seen_genes), seen_genes)
@@ -407,7 +415,7 @@ def two_seen_one_unseen_genes(pos_tuple_list, hyper_sagnn_list):
 			print("finish %d of %d" % (finish, total))
 			chunks = torch.from_numpy(chunks).long().to(device)
 			
-			pred_y = ensemble_predict(hyper_sagnn_list, chunks)
+			pred_y = ensemble_predict(dango_list, chunks)
 			
 			selected = pred_y >= kept_thresh
 			select_chunks, select_pred = chunks[selected].detach().cpu().numpy(), pred_y[selected]
@@ -423,7 +431,7 @@ def two_seen_one_unseen_genes(pos_tuple_list, hyper_sagnn_list):
 	
 	chunks = np.array(chunks)
 	chunks = torch.from_numpy(chunks).long().to(device)
-	pred_y = ensemble_predict(hyper_sagnn_list, chunks)
+	pred_y = ensemble_predict(dango_list, chunks)
 	
 	selected = pred_y >= kept_thresh
 	select_chunks, select_pred = chunks[selected].detach().cpu().numpy(), pred_y[selected]
@@ -438,11 +446,11 @@ def two_seen_one_unseen_genes(pos_tuple_list, hyper_sagnn_list):
 	np.save("../Temp/%s/two_seen_one_unseen_seen_y.npy" % datetime_object, final_y)
 	
 # predict on the original set
-def re_evaluate(pos_tuple_list, hyper_sagnn_list):
+def re_evaluate(pos_tuple_list, dango_list):
 	chunks = pos_tuple_list
 	chunks = torch.from_numpy(chunks).long().to(device)
 	
-	pred_y = ensemble_predict(hyper_sagnn_list, chunks)
+	pred_y = ensemble_predict(dango_list, chunks)
 	
 	selected = pred_y >= kept_thresh
 	select_chunks, select_pred = chunks[selected].detach().cpu().numpy(), pred_y[selected]
@@ -456,75 +464,74 @@ def re_evaluate(pos_tuple_list, hyper_sagnn_list):
 	np.save("../Temp/%s/re_eval_y.npy"  % datetime_object, final_y)
 
 
-
-args = parse_args()
-# Basic parameters for training
-get_free_gpu()
-save_path = "../data/model_" + randomString()
-embed_dim = 128
-positive_thres = 0.05
-kept_thresh = 0.045
-positive_thres_origin = positive_thres
-
-# Start loading data
-genename2id = np.load("../data/gene2id.npy", allow_pickle=True).item()
-print (np.min(list(genename2id.values())), np.max(list(genename2id.values())))
-gene_num = int(np.max(list(genename2id.values())) + 1)
-print ("gene_num", gene_num)
-
-tuples = np.load("../data/tuples.npy").astype('int')
-y = np.load("../data/y.npy").astype('float32')
-significance = np.load("../data/sign.npy").astype('float32')
-
-# We take the negative of y, because most of the y are negative,
-# by doing so, we could directly use the prediction from regression to calculate aupr without times it with -1
-y = -y
-print ("num y that pases thres", np.sum(np.abs(y) > positive_thres),np.sum(y > positive_thres), np.sum(-y > positive_thres), len(y))
-print ("tuples, min, max", tuples, np.min(tuples), np.max(tuples))
-print ("min, max of y", np.min(y), np.max(y))
-scalar = StandardScaler().fit(y.reshape((-1,1)))
-y = scalar.transform(y.reshape((-1,1))).reshape((-1))
-# Remember to transform the positive threshold too
-positive_thres = float(scalar.transform(np.array([positive_thres]).reshape((-1, 1)))[0])
-
-
-main_task_loss_func = [log_cosh]
-
-reconstruct_loss_func = sparse_mse
-
-datetime_object = args.identifier
-if datetime_object is None:
-	datetime_object = str(datetime.datetime.now())
-	datetime_object = "_".join(datetime_object.split(":")[:-1])
-	datetime_object = datetime_object.replace(" ", "_")
-	datetime_object += args.extra
+if __name__ == '__main__':
+	args = parse_args()
+	# Basic parameters for training
+	get_free_gpu()
+	save_path = "../data/model_" + randomString()
+	embed_dim = 128
+	positive_thres = 0.05
+	kept_thresh = 0.045
+	positive_thres_origin = positive_thres
 	
-
-if os.path.exists("../Temp/%s" % datetime_object):
-	shutil.rmtree("../Temp/%s" % datetime_object)
-os.mkdir("../Temp/%s" % datetime_object)
-
-if args.mode == 'eval':
-	if args.split == 0:
-		random_cv_nn_experiments(5, 10)
-	elif args.split == 1:
-		gene_split_nn_experiments(10, 40, False)
-	elif args.split == 2:
-		gene_split_nn_experiments(10, 400, True)
-elif args.mode == 'train':
-	whole_dataset_train(10)
-elif args.mode == 'predict':
-	ckpt_list = list(torch.load("../Temp/%s/Experiment_model_list" % (datetime_object), map_location='cpu'))
-	hyper_sagnn_list = create_hypersagnn_list(ckpt_list)
-	if args.predict == 0:
-		re_evaluate(tuples, hyper_sagnn_list)
-	elif args.predict == 0:
-		within_seen_genes(tuples, hyper_sagnn_list)
-	elif args.predict == 0:
-		two_seen_one_unseen_genes(tuples, hyper_sagnn_list)
-else:
-	print ("Unknown mode")
-
-
-
-
+	# Start loading data
+	genename2id = np.load("../data/gene2id.npy", allow_pickle=True).item()
+	print (np.min(list(genename2id.values())), np.max(list(genename2id.values())))
+	gene_num = int(np.max(list(genename2id.values())) + 1)
+	print ("gene_num", gene_num)
+	
+	tuples = np.load("../data/tuples.npy").astype('int')
+	y = np.load("../data/y.npy").astype('float32')
+	significance = np.load("../data/sign.npy").astype('float32')
+	
+	# We take the negative of y, because most of the y are negative,
+	# by doing so, we could directly use the prediction from regression to calculate aupr without times it with -1
+	y = -y
+	print ("num y that pases thres", np.sum(np.abs(y) > positive_thres),np.sum(y > positive_thres), np.sum(-y > positive_thres), len(y))
+	print ("tuples, min, max", tuples, np.min(tuples), np.max(tuples))
+	print ("min, max of y", np.min(y), np.max(y))
+	scalar = StandardScaler().fit(y.reshape((-1,1)))
+	y = scalar.transform(y.reshape((-1,1))).reshape((-1))
+	# Remember to transform the positive threshold too
+	positive_thres = float(scalar.transform(np.array([positive_thres]).reshape((-1, 1)))[0])
+	
+	
+	main_task_loss_func = [log_cosh]
+	
+	reconstruct_loss_func = sparse_mse
+	
+	datetime_object = args.identifier
+	if datetime_object is None:
+		datetime_object = str(datetime.datetime.now())
+		datetime_object = "_".join(datetime_object.split(":")[:-1])
+		datetime_object = datetime_object.replace(" ", "_")
+		
+	
+	if os.path.exists("../Temp/%s" % datetime_object):
+		shutil.rmtree("../Temp/%s" % datetime_object)
+	os.mkdir("../Temp/%s" % datetime_object)
+	args.mode = args.mode.split(";")
+	if 'eval' in args.mode:
+		if args.split == 0:
+			random_cv_nn_experiments(5, 10)
+		elif args.split == 1:
+			gene_split_nn_experiments(10, 40, False)
+		elif args.split == 2:
+			gene_split_nn_experiments(10, 400, True)
+	elif 'train' in args.mode:
+		whole_dataset_train(10)
+	elif 'predict' in args.mode:
+		ckpt_list = list(torch.load("../Temp/%s/Experiment_model_list" % (datetime_object), map_location='cpu'))
+		dango_list = create_dango_list(ckpt_list)
+		if args.predict == 0:
+			re_evaluate(tuples, dango_list)
+		elif args.predict == 0:
+			within_seen_genes(tuples, dango_list)
+		elif args.predict == 0:
+			two_seen_one_unseen_genes(tuples, dango_list)
+	else:
+		print ("Unknown mode")
+	
+	
+	
+	

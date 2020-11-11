@@ -427,7 +427,6 @@ if __name__ == '__main__':
 		print("train/valid/test data shape", train_data.shape, valid_data.shape, test_data.shape)
 		
 		# This is building the adjacency matrix for the GCN
-		# Use exp to make sure everything is larger than 0
 		auxi_m = [np.load("../data/%s" % name) for name in
 		          ['coexpression.npy', 'experimental.npy',
 		           'database.npy', 'neighborhood.npy',
@@ -439,7 +438,7 @@ if __name__ == '__main__':
 			w = MinMaxScaler(feature_range=(0, 1)).fit_transform(w.reshape((-1, 1))).reshape((len(x)))
 			x[:, -1] = w
 			new_auxi_m.append(x)
-			
+		auxi_m = new_auxi_m
 		auxi_adj = [torch.from_numpy(build_adj_matrix(x, gene_num)).float().to(device) for x in auxi_m]
 		
 		
