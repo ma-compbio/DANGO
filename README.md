@@ -36,5 +36,24 @@ The parameters and their meanings are
 
 ## Usage
 1. `cd Code`
-2. Run `python process.py`
-3. Run `python main.py -t 4 -i dango_run1 -m train;test -p 1`
+2. Run `python process.py` This script would process the data in the `./data` folder. Specifically, it would:
+  1. Generate two dictionaries : `./data/gene2id.npy` and `./data/id2gene.npy` which is two dictionaries that map between the gene name and node id (starts from 1). Can be load with `np.load(xx, allow_pickle=True).item()`
+  2. Process PPI networks.
+  3. Parse the trigenic interaction scores. The processed signals are stored as : `./data/tuples.npy`, `./data/y.npy`, `./data/sign.npy` which corresponds to the triplets, measured trigenic interaction scores and p-values respectively.
+3. Run `python main.py -t 4 -i dango_run1 -m train;test -p 1`. The parameters can be configured as described in the above section. A folder named as the `--identifier` parameter would be created under the `./temp/` dir where all results would be stored. The output under that folder includes:
+  1. If the `--mode` parameter include `eval`. The training process and the final performance would be printed at the screen. The performance would also be written to a file named as `result.txt`.
+  2. If the `--mode` parameter include `eval` or `train`. The selected groups of the model parameters (model enesembling trick, so there will be multiple sets of parameters) is stored as the file `Experiment_model_list`. The parameters can be transformed into a list of Dango models by
+  ```{python}
+  from main import create_dango_list
+  ckpt_list = list(torch.load("../Temp/%s/Experiment_model_list" % (dir_name), map_location='cpu'))
+	dango_list = create_dango_list(ckpt_list)
+  ```
+  3. If the model runs in the random 5-fold CV (`--mode=eval`, `--split=0`), the predicted results for each fold would be stored in a hdf5 file named as `Experiment.hdf5`. The structure of this hdf5 file is
+ ```
+  ./Cross_valid_0
+    ./ensemble_inverse
+    ./test_y_inverse
+   ./Cross_valid_1
+ ```
+ The `ensemble_inverse` and `test_y_inverse` correspond to the predicted scores and measured scores. They are both inversely transformed to the original value scale of the measured trigenic interaction scores.
+ 4. If the `--mode` parameter include `predict`, the corresponding results would be stored as `XX_tuples.npy`, `XX_y.npy`. Only tuples with predicted signals larger than 0.05 are kept to save space. Based on the `--predict` parameter, `XX`is named as `re_eval`, `within_seen`, `two_seen_one_unseen` respectively.
