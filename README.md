@@ -18,6 +18,9 @@ All the data are stored in the `./data` folder.
 
 ## Configure the parameters
 There are several parameters when running the main program `python main.py`
+```
+usage: main.py [-h] [--thread THREAD] [--mode MODE] [--identifier DANGORUN1] [--split SPLIT] [--predict PREDICT]
+```
 The parameters and their meanings are
 - `-t, --thread, default=8`, the number of parallel threads for training the ensemble of Dango models. The code is optimized for utilizing multiple GPUs. Each Dango model roughly takes about 2G GPU memory, so one 2080Ti card could train three Dango models at a time. Change this parameter based on your machine condition.
 - `-m, --mode, default='train'`, can be `eval`, `train`, `predict` or combinations of them separated by `;` (no space). For instance `train;test`. 
@@ -40,7 +43,8 @@ The parameters and their meanings are
 	1. Generate two dictionaries : `./data/gene2id.npy` and `./data/id2gene.npy` which is two dictionaries that map between the gene name and node id (starts from 1). Can be load with `np.load(xx, allow_pickle=True).item()`
 	2. Process PPI networks.
 	3. Parse the trigenic interaction scores. The processed signals are stored as : `./data/tuples.npy`, `./data/y.npy`, `./data/sign.npy` which corresponds to the triplets, measured trigenic interaction scores and p-values respectively.
-3. Run `python main.py -t 4 -i dango_run1 -m train;test -p 1`. The parameters can be configured as described in the above section. A folder named as the `--identifier` parameter would be created under the `./temp/` dir where all results would be stored. The output under that folder includes:
+3. Run `python main.py`. 
+The parameters can be configured as described in the above section. A folder named as the `--identifier` parameter would be created under the `./temp/` dir where all results would be stored. The output under that folder includes:
 	1. If the `--mode` parameter includes `eval`. The training process and the final performance would be printed on the screen. The performance would also be written to a file named `result.txt`.
 	2. If the `--mode` parameter includes `eval` or `train`. The selected groups of the model parameters (model enesembling trick, so there will be multiple sets of parameters) is stored as the file `Experiment_model_list`. The parameters can be transformed into a list of Dango models by
 	```{python}
