@@ -8,7 +8,7 @@ from utils import *
 import sys
 from train import *
 import time
-
+torch.set_num_threads(4)
 
 def get_free_gpu():
 	os.system('nvidia-smi -q -d Memory |grep -A4 GPU|grep Free > ./tmp')
@@ -69,9 +69,9 @@ def train_epoch(model, embed_nn_list, recon_nn_list, data, recon_adj_list, optim
 		pred_list.append(pred)
 		loss_recon = 0
 		
-		for j, embed_nn, recon_nn, recon_adj in enumerate(zip(embed_nn_list, recon_nn_list, recon_adj_list)):
+		for j, (embed_nn, recon_nn, recon_adj) in enumerate(zip(embed_nn_list, recon_nn_list, recon_adj_list)):
 			loss_recon += forward_batch_recon(embed_nn, recon_nn, batch_recon_index, recon_adj, lambda_list[j])
-		
+			
 		beta = 0.001 if isinstance(model, Hyper_SAGNN) else 0
 		loss = loss_regress + loss_recon * beta
 		
@@ -293,7 +293,7 @@ def pre_train(embed_nn_list, recon_nn_list, recon_adj_list, optimizer, epochs, b
 			batch_data = x[i * batch_size:(i + 1) * batch_size]
 			loss_recon = 0
 			
-			for j, embed_nn, recon_nn, recon_adj in enumerate(zip(embed_nn_list, recon_nn_list, recon_adj_list)):
+			for j, (embed_nn, recon_nn, recon_adj) in enumerate(zip(embed_nn_list, recon_nn_list, recon_adj_list)):
 				loss_recon += forward_batch_recon(embed_nn, recon_nn, batch_data, recon_adj, lambda_list[j])
 			
 			loss = loss_recon
@@ -432,6 +432,7 @@ if __name__ == '__main__':
 		           'database.npy', 'neighborhood.npy',
 		           'fusion.npy', 'cooccurence.npy']]
 		lambda_list = [0.1, 0.1, 1.0, 1.0, 1.0, 1.0]
+		# lambda_list = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 		new_auxi_m = []
 		for x in auxi_m:
 			w = x[:, -1]
@@ -457,9 +458,9 @@ if __name__ == '__main__':
 		test_sign = torch.from_numpy(test_sign).to(device)
 		
 		ckpt_list, score_list, hypersagnn, graphsage_embedding, recon_nn, optimizer, ensemble_part = one_training_procedure(
-			(train_data, train_y, train_sign),
-			(valid_data, valid_y, valid_sign),
-			(test_data, test_y, test_sign), gene_num)
+			(train_data, train_y),
+			(valid_data, valid_y),
+			(test_data, test_y), gene_num)
 		
 		torch.save(ckpt_list, "../Temp/%s/%s_model_list" % (save_dir, save_string))
 		np.save("../Temp/%s/ensemble_%s.npy" %(save_dir, save_string), ensemble_part.detach().cpu().numpy())
