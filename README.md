@@ -36,7 +36,8 @@ The parameters and their meanings are
   - `0` stands for predicting on the original set of triplets (set 1 in the paper)
   - `1` stands for predicting on the set of triplets where all three genes are observed in the original dataset (set 2 in the paper)
   - `2` stands for predicting on the set of triplets where two of the genes are observed and the third gene is unobserved in the original dataset
-
+- `--gp, default=False`, to enable gaussian process regression for model uncertainty estimation of predicted interactions.
+- `-w, --withprotein, default=None`, [optional] supply path to protein embeddings per gene
 ## Usage
 1. `cd Code`
 2. Run `python process.py` This script would process the data in the `./data` folder. Specifically, it would:
