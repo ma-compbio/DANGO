@@ -58,7 +58,7 @@ class BasicGP(gpytorch.models.ExactGP):             # For CPU Usage
 def train_variational_gp(train_loader, train_x, train_y, output_device, num_epochs=20):
 
     likelihood = gpytorch.likelihoods.GaussianLikelihood().to(output_device)
-    model = VariationalGP(train_x[:500, :]).to(output_device)
+    model = VariationalGP(train_x[:500, :]).to(output_device)   # 500 is number of inducing points
     model.train()
     likelihood.train()
 

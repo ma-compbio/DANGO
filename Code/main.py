@@ -23,6 +23,7 @@ device = os.environ["device"]
 
 from model import get_model
 from train import *
+import datetime
 
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import KFold, train_test_split
@@ -548,7 +549,7 @@ if __name__ == '__main__':
 	# devices = get_free_gpus(2)
 	# devices = [7]
 	devices = [int(os.environ["device"])]
-	os.environ["protein_embedding_path"] = args.withprotein
+	os.environ["protein_embedding_path"] = args.withprotein if args.withprotein else ""
 	withprotein = True if args.withprotein else False
  
 	save_path = "../data/model_" + randomString()
