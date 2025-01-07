@@ -1,28 +1,42 @@
 import torch
+import os
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# os.environ["device"] = 'gpu' # default value (this will be overridden)
+import argparse
+
+def parse_args():
+	parser = argparse.ArgumentParser(description="DANGO Main Program")
+	parser.add_argument('-t', '--thread', type=int, default=8)
+	parser.add_argument('-m', '--mode', type=str, default='train')
+	parser.add_argument('-i', '--identifier', type=str, default=None)
+	parser.add_argument('-f', '--modelfolder', type=str, default=None, help="add folder of pretrained model to be used")
+	parser.add_argument('-s', '--split', type=int, default=0)
+	parser.add_argument('-p', '--predict', type=int, default=0)
+	parser.add_argument('-d', '--device', type=int, default='0', help="-1 if no gpu")
+	parser.add_argument('--gp', action="store_true", help="add gaussian process")
+	parser.add_argument('-w', '--withprotein', type=str,default=None, help="supply plath to protein embeddings")
+	return parser.parse_args()
+
+args = parse_args()
+os.environ["device"] = 'cpu' if args.device == -1 else str(args.device)
+device = os.environ["device"]
+
 from model import get_model
 from train import *
+import datetime
+
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import KFold, train_test_split
-import datetime
+
 import h5py
+from GPR import *
 
 import subprocess
-import argparse
 from itertools import combinations
 import random
 import shutil
 # This function is splitting data to make all test data nodes are unseen in training
 
-def parse_args():
-	parser = argparse.ArgumentParser(description="Higashi main program")
-	parser.add_argument('-t', '--thread', type=int, default=8)
-	parser.add_argument('-m', '--mode', type=str, default='train')
-	parser.add_argument('-i', '--identifier', type=str, default=None)
-	parser.add_argument('-s', '--split', type=int, default=0)
-	parser.add_argument('-p', '--predict', type=int, default=0)
-	return parser.parse_args()
 
 
 
@@ -88,14 +102,23 @@ def baseline(train_data, train_y, test_data, test_y):
 
 
 # call subprocess for training a Dango instance (used in multiprocessing)
-def mp_train(positive_thres, gene_num, split_loc, save_dir, save_string):
-	cmd = ["python", "train.py", str(positive_thres), str(gene_num), str(embed_dim), split_loc, save_dir, save_string]
+def mp_train(positive_thres, gene_num, split_loc, save_dir, save_string, withPPI):
+	cmd = ["python", "train.py", str(positive_thres), str(gene_num), str(embed_dim), split_loc, save_dir, save_string, str(withPPI)]
 	subprocess.call(cmd)
 	print("start reading")
 
 
+# def fit_gaussian_process(triplet_embeddings, residuals):
+# 	print("Fitting Gaussian Process...")
+# 	kernel = 1 * RBF(length_scale=1.0, length_scale_bounds=(1e-2, 1e2))
+# 	GP = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=9, copy_X_train=False)
+# 	GP.fit(triplet_embeddings, residuals)  # fit on the residuals of DANGO
+# 	optimized_kernel = GP.kernel_
+# 	print(f'GP Optimized Kernel: %s' % str(optimized_kernel))
+#
+# 	return GP, optimized_kernel
 
-def random_cv_nn_experiments(n_fold=5, rounds=10):
+def random_cv_nn_experiments(n_fold=5, rounds=10,debug=False, withPPI=False):
 	print("random_cv_params", n_fold, rounds)
 	kf = KFold(n_splits=n_fold, shuffle=True)
 	f = h5py.File(os.path.join("../Temp/%s/Experiment.hdf5" % datetime_object), "w")
@@ -124,18 +147,22 @@ def random_cv_nn_experiments(n_fold=5, rounds=10):
 			save_string = "%d_%d" % (cv_count, i)
 			save_string_list.append(save_string)
 			np.save(split_loc, indexs)
-			p_list.append(pool.submit(mp_train, positive_thres_origin, gene_num, split_loc, datetime_object,
-			                          save_string))
-			time.sleep(60)
-		
+			if debug:
+				mp_train(positive_thres_origin, gene_num, split_loc, datetime_object,save_string)
+			else:
+				p_list.append(pool.submit(mp_train, positive_thres_origin, gene_num, split_loc, datetime_object,
+										  save_string, withPPI))
+				time.sleep(60)
+		pool.shutdown(wait=True)
 		finish_count = 0
+		print(save_string_list)
 		
 		for save_string in save_string_list:
 			print("Now at Fold %d iteration %d" % (cv_count, finish_count))
-			# Some of the child process might got killed due to memory/GPU memory usage
+			# Some child process might get killed due to memory/GPU memory usage
 			# Or someone you are sharing the machine with decide to run a gigantic process in the middle
 			# The try / exception here would skip those killed child process
-			# so that you won't get frustrated about running the 5-fold CV from scracth
+			# so that you won't get frustrated about running the 5-fold CV from scratch
 			# But if most of teh child process got killed... Run the program again...
 			try:
 				ckpt_list = list(
@@ -144,13 +171,13 @@ def random_cv_nn_experiments(n_fold=5, rounds=10):
 				finish_count += 1
 				checkpoint_list += list(ckpt_list)
 				ensemble += ensemble_part
-				
 			except:
 				print("some training instances got killed")
-		
+
+		if finish_count == 0:
+			finish_count = 1
 		ensemble /= finish_count
-		
-		
+
 		print("ensemble at Fold %d" % cv_count)
 		corr1, corr2 = correlation_cuda(test_y, ensemble)
 		pos_mask = test_y >= positive_thres
@@ -162,16 +189,18 @@ def random_cv_nn_experiments(n_fold=5, rounds=10):
 		print(corr1_pos, corr2_pos)
 		print("AUC, AUPR")
 		print(roc, aupr)
-		
+		sys.stdout.flush()
+
 		corr1, corr2 = correlation_cuda(test_y, ensemble)
 		pos_mask = test_y >= positive_thres
 		corr1_pos, corr2_pos = correlation_cuda(test_y[pos_mask], ensemble[pos_mask])
 		roc, aupr = roc_auc_cuda(pos_mask, ensemble, balance=True)
 		result_file.write("Fold %d\n" % (cv_count))
-		for score in [corr1, corr2, corr1_pos, corr2_pos, roc, aupr]:
-			result_file.write("%f\n" % (score))
-		sys.stdout.flush()
-		
+		metrics = [corr1, corr2, corr1_pos, corr2_pos, roc, aupr]
+		for score in metrics:
+			print("writing score:" + str(score))
+			result_file.write("%f\n" % score)
+			result_file.flush()
 		print("Start saving")
 		# grp.create_dataset("train_index", data=train_index)
 		# grp.create_dataset("valid_index", data=valid_index)
@@ -196,11 +225,12 @@ def random_cv_nn_experiments(n_fold=5, rounds=10):
 		
 		cv_count += 1
 	torch.save(checkpoint_list_all, "../Temp/%s/Experiment_model_list" % (datetime_object))
-	f.close()
 	result_file.close()
+	f.close()
+	# return metrics
+
 	
-	
-def gene_split_nn_experiments(rounds=10,n_genes=40, strict=False):
+def gene_split_nn_experiments(rounds=10, n_genes=40, strict=False, withPPI=False):
 	genes_avail = np.unique(tuples)
 	np.random.seed(43)
 	np.random.shuffle(genes_avail)
@@ -233,23 +263,25 @@ def gene_split_nn_experiments(rounds=10,n_genes=40, strict=False):
 		save_string_list.append(save_string)
 		np.save(split_loc, indexs)
 		p_list.append(
-			pool.submit(mp_train, positive_thres_origin, gene_num, split_loc, datetime_object, save_string))
+			pool.submit(mp_train, positive_thres_origin, gene_num, split_loc, datetime_object, save_string, withPPI))
 		time.sleep(60)
-		
+	pool.shutdown(wait=True)
 
 	for save_string in save_string_list:
-		ckpt_list = list(torch.load("../Temp/%s/%s_model_list" % (datetime_object, save_string)))
-		checkpoint_list += ckpt_list
-		ensemble_part = np.load("../Temp/%s/ensemble_%s.npy" % (datetime_object, save_string))
-		checkpoint_list += list(ckpt_list)
-		ensemble += ensemble_part
+		try:
+			ckpt_list = list(torch.load("../Temp/%s/%s_model_list" % (datetime_object, save_string)))
+			checkpoint_list += ckpt_list
+			ensemble_part = np.load("../Temp/%s/ensemble_%s.npy" % (datetime_object, save_string))
+			checkpoint_list += list(ckpt_list)
+			ensemble += ensemble_part
+		except:
+			pass
 
 
 	ensemble /= rounds
 	torch.save(checkpoint_list, "../Temp/%s/Experiment_model_list" % (datetime_object))
 	print("ensemble")
 	pos_mask = test_y >= positive_thres
-	result_file = open("../Temp/%s/result.txt" %(datetime_object), "a")
 	corr1, corr2 = correlation_cuda(test_y, ensemble)
 	pos_mask = test_y >= positive_thres
 	corr1_pos, corr2_pos = correlation_cuda(test_y[pos_mask], ensemble[pos_mask])
@@ -260,16 +292,20 @@ def gene_split_nn_experiments(rounds=10,n_genes=40, strict=False):
 	print (corr1_pos, corr2_pos)
 	print ("AUC, AUPR")
 	print (roc, aupr)
-	result_file.write("gene split")
-	for score in [corr1, corr2, corr1_pos, corr2_pos, roc, aupr]:
-		result_file.write("%f\n" %(score))
 	sys.stdout.flush()
-	result_file.close()
-	
+	metrics = [corr1, corr2, corr1_pos, corr2_pos, roc, aupr]
+	print(metrics)
+	with open("../Temp/%s/result.txt" %(datetime_object), "a") as result_file:
+		result_file.write("gene split\n")
+		for score in metrics:
+			result_file.write("%f\n" %(score))
+			result_file.flush()
+	# result_file.close()
+	sys.stdout.flush()
+	return metrics
 
 
-
-def whole_dataset_train(rounds=10):
+def whole_dataset_train(rounds=10, withPPI=False):
 	pool = ProcessPoolExecutor(max_workers=args.thread)
 	p_list = []
 	save_string_list = []
@@ -284,7 +320,7 @@ def whole_dataset_train(rounds=10):
 		save_string_list.append(save_string)
 		np.save(split_loc, indexs)
 		p_list.append(
-			pool.submit(mp_train, positive_thres_origin, gene_num, split_loc, datetime_object, save_string))
+			pool.submit(mp_train, positive_thres_origin, gene_num, split_loc, datetime_object, save_string, withPPI))
 		time.sleep(5)
 	
 	pool.shutdown(wait=True)
@@ -299,10 +335,11 @@ def whole_dataset_train(rounds=10):
 def create_dango_list(ckpt_list):
 	# This is building the adjacency matrix for the GCN
 	auxi_m = [np.load("../data/%s" % name) for name in
-	          ['coexpression.npy', 'experimental.npy',
-	           'database.npy', 'neighborhood.npy',
-	           'fusion.npy', 'cooccurence.npy']]
-	lambda_list = [0.1, 0.1, 1.0, 1.0, 1.0, 1.0]
+			  ['coexpression.npy', 'experimental.npy',
+			   'database.npy', 'neighborhood.npy',
+			   'fusion.npy', 'cooccurence.npy']]
+	# lambda_list = [0.1, 0.1, 1.0, 1.0, 1.0, 1.0]
+	lambda_list = [0.1, 0.1, 1.0, 1.0, 1.0, 1.0, 1.0]
 	new_auxi_m = []
 	for x in auxi_m:
 		w = x[:, -1]
@@ -315,7 +352,7 @@ def create_dango_list(ckpt_list):
 	dango_list = []
 	
 	for checkpoint in ckpt_list:
-		graphsage_embedding, recon_nn, node_embedding, hypersagnn = get_model(gene_num, embed_dim, auxi_m, auxi_adj)
+		graphsage_embedding, recon_nn, node_embedding, hypersagnn, ppi_nn = get_model(gene_num, embed_dim, auxi_m, auxi_adj)
 		hypersagnn.load_state_dict(checkpoint['model_link'])
 		hypersagnn.node_embedding.off_hook(np.arange(1, gene_num), gene_num)
 		del graphsage_embedding
@@ -334,11 +371,37 @@ def ensemble_predict(dango_list, chunks):
 	pred_y = scalar.inverse_transform(ensemble.reshape((-1, 1))).reshape((-1))
 	return pred_y
 
+
+# get original node embeddings that are inputs to the model
+def get_embeddings(dango_list, chunks, batch_size=4800):# add permutation of embeddings
+	ensemble_embeddings = 0
+	for hypersagnn in dango_list:
+		batch_outputs = []
+		hypersagnn.eval()
+		with torch.no_grad():
+			for j in range(math.ceil(len(chunks) / batch_size)):
+				x = chunks[j * batch_size:min((j + 1) * batch_size, len(chunks))]
+				dynamic, static, _ = hypersagnn.get_embedding(x)
+				batch_embedding = (dynamic - static) ** 2
+				batch_outputs.append(dynamic)
+			embedding = torch.cat(batch_outputs, dim=0)
+			ensemble_embeddings += torch.mean(embedding, dim=1)
+	ensemble_embeddings /= len(dango_list)
+	return ensemble_embeddings
+
+
+def ensemble_predict_gp(dango_list, chunks, GP, embeddings):
+	pred_y = ensemble_predict(dango_list, chunks)
+	residual, sigma = GP.predict(embeddings, return_std=True)
+
+	return pred_y + residual, sigma
+
+
 # all combinations of seen genes
 def within_seen_genes(pos_tuple_list, dango_list):
 	seen_genes = np.unique(pos_tuple_list.reshape((-1)))
 	seen_genes = np.sort(seen_genes)
-	print (len(seen_genes), seen_genes)
+	print(len(seen_genes), seen_genes)
 	
 	combs = combinations(seen_genes, 3)
 	total = len(seen_genes) * (len(seen_genes) - 1) * (len(seen_genes) - 2) / 6
@@ -353,15 +416,15 @@ def within_seen_genes(pos_tuple_list, dango_list):
 		
 		if len(chunks) == 50000000:
 			chunks = np.array(chunks)
-			print ("finish %d of %d" %(finish,total))
+			print("finish %d of %d" % (finish, total))
 			chunks = torch.from_numpy(chunks).long().to(device)
 			
 			pred_y = ensemble_predict(dango_list, chunks)
 			
 			selected = pred_y >= kept_thresh
 			select_chunks, select_pred = chunks[selected].detach().cpu().numpy(), pred_y[selected]
-			print ()
-			print ("selected rate", len(select_chunks) / len(chunks))
+			print()
+			print("selected rate", len(select_chunks) / len(chunks))
 			
 			if len(select_chunks) > 0:
 				final_tuples.append(select_chunks)
@@ -372,10 +435,22 @@ def within_seen_genes(pos_tuple_list, dango_list):
 		
 	chunks = np.array(chunks)
 	chunks = torch.from_numpy(chunks).long().to(device)
+
+	# means = None
+	# variances = None
+	# if GP is not None:
+	# 	gp_pred_x = get_embeddings(dango_list, chunks).to(device)
+	# 	predict_dataset = TensorDataset(gp_pred_x, torch.zeros(gp_pred_x.size(dim=0),1))
+	# 	predict_loader = DataLoader(predict_dataset, batch_size=1024, shuffle=False)
+	# 	means, variances = predict_variational_gp(predict_loader, GP, likelihood)
+
 	pred_y = ensemble_predict(dango_list, chunks)
+
+
 	
 	selected = pred_y >= kept_thresh
 	select_chunks, select_pred = chunks[selected].detach().cpu().numpy(), pred_y[selected]
+	# select_means, select_variances = means[selected], variances[selected]
 	print(len(select_chunks))
 	if len(select_chunks) > 0:
 		final_tuples.append(select_chunks)
@@ -383,10 +458,14 @@ def within_seen_genes(pos_tuple_list, dango_list):
 	
 	final_tuples = np.concatenate(final_tuples)
 	final_y = np.concatenate(final_y)
-	np.save("../Temp/%s/within_seen_tuples.npy"  % datetime_object , final_tuples)
-	np.save("../Temp/%s/within_seen_y.npy"  % datetime_object, final_y)
+	np.save("../Temp/%s/within_seen_tuples.npy" % datetime_object, final_tuples)
+	np.save("../Temp/%s/within_seen_y.npy" % datetime_object, final_y)
+	# if means is not None and variances is not None:
+	# 	np.save("../Temp/%s/within_seen_gp_means.npy" % datetime_object, select_means)
+	# 	np.save("../Temp/%s/within_seen_gp_vars.npy" % datetime_object, select_variances)
 
-# combinatioins of two seen genes and one unseen
+
+# combinations of two seen genes and one unseen
 def two_seen_one_unseen_genes(pos_tuple_list, dango_list):
 	seen_genes = np.unique(pos_tuple_list.reshape((-1)))
 	seen_genes = np.sort(seen_genes)
@@ -444,36 +523,41 @@ def two_seen_one_unseen_genes(pos_tuple_list, dango_list):
 	final_y = np.concatenate(final_y)
 	np.save("../Temp/%s/two_seen_one_unseen_tuples.npy" % datetime_object, final_tuples)
 	np.save("../Temp/%s/two_seen_one_unseen_seen_y.npy" % datetime_object, final_y)
-	
+
+
 # predict on the original set
 def re_evaluate(pos_tuple_list, dango_list):
 	chunks = pos_tuple_list
 	chunks = torch.from_numpy(chunks).long().to(device)
-	
 	pred_y = ensemble_predict(dango_list, chunks)
-	
+
+	kept_thresh = 0.05
 	selected = pred_y >= kept_thresh
 	select_chunks, select_pred = chunks[selected].detach().cpu().numpy(), pred_y[selected]
 	print()
 	print("selected rate", len(select_chunks) / len(chunks))
-	
-	if len(select_chunks) > 0:
-		final_tuples = select_chunks
-		final_y = pred_y[selected]
-	np.save("../Temp/%s/re_eval_tuples.npy"  % datetime_object, final_tuples)
-	np.save("../Temp/%s/re_eval_y.npy"  % datetime_object, final_y)
+
+	# if len(select_chunks) > 0:
+	final_tuples = select_chunks
+	final_y = pred_y[selected]
+	np.save("../Temp/%s/re_eval_tuples.npy" % datetime_object, final_tuples)
+	np.save("../Temp/%s/re_eval_y.npy" % datetime_object, final_y)
 
 
 if __name__ == '__main__':
-	args = parse_args()
 	# Basic parameters for training
-	get_free_gpu()
+	# devices = get_free_gpus(2)
+	# devices = [7]
+	devices = [int(os.environ["device"])]
+	os.environ["protein_embedding_path"] = args.withprotein if args.withprotein else ""
+	withprotein = True if args.withprotein else False
+ 
 	save_path = "../data/model_" + randomString()
 	embed_dim = 128
 	positive_thres = 0.05
 	kept_thresh = 0.045
 	positive_thres_origin = positive_thres
-	
+
 	# Start loading data
 	genename2id = np.load("../data/gene2id.npy", allow_pickle=True).item()
 	print (np.min(list(genename2id.values())), np.max(list(genename2id.values())))
@@ -483,7 +567,7 @@ if __name__ == '__main__':
 	tuples = np.load("../data/tuples.npy").astype('int')
 	y = np.load("../data/y.npy").astype('float32')
 	significance = np.load("../data/sign.npy").astype('float32')
-	
+
 	# We take the negative of y, because most of the y are negative,
 	# by doing so, we could directly use the prediction from regression to calculate aupr without times it with -1
 	y = -y
@@ -495,7 +579,8 @@ if __name__ == '__main__':
 	# Remember to transform the positive threshold too
 	positive_thres = float(scalar.transform(np.array([positive_thres]).reshape((-1, 1)))[0])
 	
-	
+
+
 	main_task_loss_func = [log_cosh]
 	
 	reconstruct_loss_func = sparse_mse
@@ -505,33 +590,198 @@ if __name__ == '__main__':
 		datetime_object = str(datetime.datetime.now())
 		datetime_object = "_".join(datetime_object.split(":")[:-1])
 		datetime_object = datetime_object.replace(" ", "_")
-		
-	
-	if os.path.exists("../Temp/%s" % datetime_object):
-		shutil.rmtree("../Temp/%s" % datetime_object)
-	os.mkdir("../Temp/%s" % datetime_object)
+
+	if not os.path.exists("../Temp/%s" % datetime_object):
+		os.mkdir("../Temp/%s" % datetime_object)
+      
 	args.mode = args.mode.split(";")
-	if 'eval' in args.mode:
+	if 'eval-debug' in args.mode:
 		if args.split == 0:
-			random_cv_nn_experiments(5, 10)
+			print("in eval-debug")
+			random_cv_nn_experiments(2, 1, debug=True, withPPI=withprotein)
+	elif 'eval' in args.mode:
+		metrics = None
+		if args.split == 0:
+			print("Evaluating on split 0")
+			random_cv_nn_experiments(2, 1,withPPI=withprotein)
 		elif args.split == 1:
-			gene_split_nn_experiments(10, 40, False)
+			print("Evaluating on split 1")
+			gene_split_nn_experiments(10, 40, False, withPPI=withprotein)
 		elif args.split == 2:
-			gene_split_nn_experiments(10, 400, True)
+			print("Evaluating on split 2")
+			gene_split_nn_experiments(10, 400, True, withPPI=withprotein)
+		else:
+			pass
 	elif 'train' in args.mode:
 		whole_dataset_train(10)
 	elif 'predict' in args.mode:
-		ckpt_list = list(torch.load("../Temp/%s/Experiment_model_list" % (datetime_object), map_location='cpu'))
+		if args.modelfolder is not None and os.path.exists("../Temp/%s" % args.modelfolder):
+			ckpt_list = list(torch.load("../Temp/%s/Experiment_model_list" % args.modelfolder, map_location='cpu'))
+		else:
+			ckpt_list = list(torch.load("../Temp/%s/Experiment_model_list" % datetime_object, map_location='cpu'))
 		dango_list = create_dango_list(ckpt_list)
+
 		if args.predict == 0:
+			print("Evaluating on split 0")
 			re_evaluate(tuples, dango_list)
-		elif args.predict == 0:
+		elif args.predict == 1:
+			print("Evaluating on split 1")
 			within_seen_genes(tuples, dango_list)
-		elif args.predict == 0:
+		elif args.predict == 2:
+			print("Evaluating on split 2")
 			two_seen_one_unseen_genes(tuples, dango_list)
+		else:
+			pass
+
+		if args.gp and args.predict != 0:
+
+			# --------------------------------------- Training Variational GP --------------------------------- #
+
+			tuples_name = "within_seen_tuples.npy" if args.predict == 1 else "two_seen_one_unseen_tuples.npy"
+
+			from torch.utils.data import TensorDataset, DataLoader
+			chunks = torch.from_numpy(tuples).long().to(devices[0])
+			x = get_embeddings(dango_list, chunks).contiguous().to(devices[0])
+			y = torch.from_numpy(y).contiguous().to(devices[0])
+			pred_y = torch.from_numpy(ensemble_predict(dango_list, chunks)).to(devices[0])
+
+			train_x = x
+			train_y = y - pred_y
+			np.save("../Temp/%s/residuals.npy" % datetime_object, train_y.cpu().numpy())
+
+			train_dataset = TensorDataset(train_x, train_y)
+			train_loader = DataLoader(train_dataset, batch_size=1024, shuffle=True)
+
+			GP, likelihood = train_variational_gp(train_loader, train_x, train_y, devices[0])
+			torch.save(GP.state_dict(), "../Temp/%s/Trained_GaussianProcess" % datetime_object)
+
+			torch.cuda.empty_cache()
+			del chunks, x, y, train_x, train_y, train_loader, pred_y
+
+			# ------------------------------------ Predicting with Variational GP ----------------------------- #
+			tuples = torch.from_numpy(np.load("../Temp/%s/%s" % (datetime_object, tuples_name))).to(devices[0])
+			predict_dataset = TensorDataset(tuples, torch.zeros(tuples.size(dim=0), 1))		# add useless target value
+			predict_loader = DataLoader(predict_dataset, batch_size=10000, shuffle=False)
+			means, variances = predict_variational_gp(predict_loader, GP.to(devices[0]), likelihood.to(devices[0]), dango_list, get_embeddings, devices[0])
+
+			print(len(tuples), len(means), len(variances))
+			np.save("../Temp/%s/gp_means.npy" % datetime_object, means)
+			np.save("../Temp/%s/gp_variances.npy" % datetime_object, variances)
+
 	else:
-		print ("Unknown mode")
-	
-	
+		print("Unknown mode")
+
+
+# predict = False
+	# if predict:
+	# 	chunks = torch.from_numpy(tuples).long().to(devices[0])
+	# 	embeddings = get_embeddings(dango_list, chunks).contiguous().to(devices[0])
+	# 	chunks = chunks.cpu()
+	# 	train_y = torch.from_numpy(y).contiguous().to(devices[0])
+	# 	state_dict = torch.load('../Temp/2022-07-05_09_50/GaussianProcess')
+	# 	gp = ExactGPModel(embeddings, train_y, device_ids=devices, output_device=devices[0])  # Create a new GP model
+	# 	gp.load_state_dict(state_dict)
+	# 	torch.cuda.empty_cache()
+	# 	predictions = predict_gp(gp.to(devices[0]), embeddings.to('cpu'), devices=devices)
+
+	# ----------------------------------------------CPU GP------------------------------------------- #
+
+	# chunks = torch.from_numpy(tuples).long().to(devices[0])
+	# x = get_embeddings(dango_list, chunks).to('cpu')
+	# print(type(x))
+	# mask = np.random.rand(len(x)) < 0.8
+	# test_x = x[~mask]
+	# pred_y = torch.from_numpy(ensemble_predict(dango_list, chunks)).to(devices[0])
+	# train_y = torch.from_numpy(y).to(devices[0])
+	# y = (train_y-pred_y).to('cpu')
+	# likelihood = gpytorch.likelihoods.GaussianLikelihood()
+	# model = CpuGP(x, y, likelihood)
+	# model.train()
+	# likelihood.train()
+	# print(x)
+	# train_gp_cpu(model, likelihood, x, y, training_iter=20)
+	#
+	# model.eval()
+	# likelihood.eval()
+	# # Make predictions by feeding model through likelihood
+	# with torch.no_grad(), gpytorch.settings.fast_pred_var():
+	# 	# Test points are regularly spaced along [0,1]
+	# 	predictions = likelihood(model(test_x))
+	# print(predictions)
+	# ------------------------------------------------------------------------------------------------- #
+# means, variances = predict_variational_gp(test_loader, GP, likelihood)
+
+# selected = pred_y.cpu().numpy() >= kept_thresh
+# select_chunks, select_pred = train_x[selected].detach().cpu().numpy(), pred_y[selected].cpu().numpy()
+# selected_means, selected_vars = means[selected], variances[selected]
+# print()
+# print("selected rate", len(select_chunks) / len(chunks))
+#
+# # if len(select_chunks) > 0:
+# # 	final_tuples = select_chunks
+# # 	final_y = pred_y[selected]
+# # np.save("../Temp/%s/gp_tuples.npy" % datetime_object, select_chunks)
+# np.save("../Temp/%s/dango_preds_y.npy" % datetime_object, select_pred)
+# np.save("../Temp/%s/gp_means.npy" % datetime_object, selected_means)
+# np.save("../Temp/%s/gp_variances.npy" % datetime_object, selected_vars)
+
+# if args.gaussian:
+# 	print("Preprocessing GP training data...")
+# 	chunks = torch.from_numpy(tuples).long().to(devices[0])
+# 	x = get_embeddings(dango_list, chunks).contiguous().to(devices[0])
+# 	mask = np.random.rand(len(x)) < 0.8
+# 	# train_x, test_x = x[mask], x[~mask]
+# 	pred_y = torch.from_numpy(ensemble_predict(dango_list, chunks)).to(devices[0])
+# 	print(pred_y)
+# 	train_x = x
+# 	train_y = torch.from_numpy(y).contiguous().to(devices[0])
+# 	print("Fitting Gaussian Process...")
+# 	GP, _ = fit_gaussian_process(train_x, train_y-pred_y)
+#
+# 	train_y = train_y.detach().cpu().numpy()
+# 	pred_y = pred_y.detach().cpu().numpy()
+# 	del pred_y
+# 	del train_y
+# 	print("Evaluating Gaussian Process...")
+# 	GP.eval()
+# 	torch.save(GP.state_dict(), "../Temp/%s/GaussianProcess" % (datetime_object))
+# 	# likelihood.eval()
+# 	train_x = train_x.detach().cpu()
+# 	# torch.cuda.list_gpu_processes("cuda:%d"%device)
+# 	# torch.cuda.mem_get_info("cuda:%d"%device)
+# 	# torch.cuda.memory_summary("cuda:%d"%device)
+# 	batch_size = 100
+# 	pred_means = []
+# 	pred_vars = []
+# 	with torch.no_grad(), gpytorch.settings.fast_pred_var(), gpytorch.settings.max_root_decomposition_size(35):
+# 		for j in range(math.ceil(len(train_x) / batch_size)):
+# 			x = train_x[j * batch_size:min((j + 1) * batch_size, len(train_x))].to(device)
+# 			print(x.shape)
+# 			prediction = GP(x)
+# 			mean = prediction.mean.detach().cpu().numpy()
+# 			var = prediction.variance.detach().cpu().numpy()
+# 			pred_means.append(mean)
+# 			pred_vars.append(var)
+# 		pred_means = torch.cat(pred_means, dim=0)
+# 		pred_vars = torch.cat(pred_vars, dim=0)
+# 	pred_vars = pred_vars.detach().cpu().numpy()
+# 	pred_means = pred_means.detach().cpu().numpy()
+# 	print(pred_means)
+# 	print(pred_means.flatten())
+# 	print(pred_vars.flatten())
+# 	print(pred_means.flatten() + pred_y.detach().cpu().numpy())
+# 	selected = pred_y >= kept_thresh
+# 	select_chunks, select_pred = train_x[selected].detach().cpu().numpy(), pred_y[selected]
+# 	selected_means, selected_vars = pred_means[selected], pred_vars[selected]
+# 	print()
+# 	print("selected rate", len(select_chunks) / len(chunks))
+#
+# 	# if len(select_chunks) > 0:
+# 	# 	final_tuples = select_chunks
+# 	# 	final_y = pred_y[selected]
+# 	np.save("../Temp/%s/re_eval_tuples.npy" % datetime_object, select_chunks)
+# 	np.save("../Temp/%s/re_eval_y.npy" % datetime_object, select_pred)
+# 	np.save("../Temp/%s/re_eval_selected_means.npy" % datetime_object, selected_means)
+# 	np.save("../Temp/%s/re_eval_selected_vars.npy" % datetime_object, selected_vars)
 	
 	

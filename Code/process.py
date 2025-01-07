@@ -28,7 +28,7 @@ def generate_sub_pairwise_network():
 	# These files already starts with 1
 	for f in ['yeast_string_coexpression_adjacency.txt', 'yeast_string_experimental_adjacency.txt',
 	          'yeast_string_database_adjacency.txt', 'yeast_string_neighborhood_adjacency.txt',
-	          'yeast_string_fusion_adjacency.txt', 'yeast_string_cooccurence_adjacency.txt']:
+	          'yeast_string_fusion_adjacency.txt', 'yeast_string_cooccurence_adjacency.txt','yeast_genes_baker_adjacency.txt']:
 		adj = np.loadtxt("../data/yeast_network/%s" % f, dtype='float32')
 		file_name = f.split("_")[2]
 		
@@ -124,6 +124,7 @@ def generate_tuple_list():
 	pairwise_list = np.array(pairwise_list)
 	pairwise_label = np.array(pairwise_label)
 	print ()
+	print(tuple_list.max())
 	print ("trigenic_count", trigenic_count)
 	print ("unique_genes", len(unique_gene_list), np.unique(list(unique_gene_list)).shape)
 	print ("mapped genes", np.unique(tuple_list.reshape((-1))).shape)
