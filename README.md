@@ -9,6 +9,7 @@ This repo contains the code and data for the analysis of the yeast trigenic inte
 - scikit-learn
 - tqdm
 - xgboost (used in the baseline, if you don't plan to run the baseline, it's not required)
+- gpytorch (if using gpr for uncertainty estimation)
 
 ## Data used in this repo
 
