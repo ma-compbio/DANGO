@@ -19,7 +19,7 @@ All the data are stored in the `./data` folder.
 ## Configure the parameters
 There are several parameters when running the main program `python main.py`
 ```
-usage: main.py [-h] [--thread THREAD] [--mode MODE] [--identifier DANGORUN1] [--split SPLIT] [--predict PREDICT]
+usage: main.py [-h] [--thread THREAD] [--mode MODE] [--identifier DANGORUN1] [--split SPLIT] [--predict PREDICT] [--gp] [--withprotein WITHPROTEIN]
 ```
 The parameters and their meanings are
 - `-t, --thread, default=8`, the number of parallel threads for training the ensemble of Dango models. The code is optimized for utilizing multiple GPUs. Each Dango model roughly takes about 2G GPU memory, so one 2080Ti card could train three Dango models at a time. Change this parameter based on your machine condition.
@@ -36,7 +36,7 @@ The parameters and their meanings are
   - `0` stands for predicting on the original set of triplets (set 1 in the paper)
   - `1` stands for predicting on the set of triplets where all three genes are observed in the original dataset (set 2 in the paper)
   - `2` stands for predicting on the set of triplets where two of the genes are observed and the third gene is unobserved in the original dataset
-- `--gp, default=False`, to enable gaussian process regression for model uncertainty estimation of predicted interactions.
+- `--gp, action=store_true`, to enable gaussian process regression for model uncertainty estimation of predicted interactions.
 - `-w, --withprotein, default=None`, [optional] supply path to protein embeddings per gene
 ## Usage
 1. `cd Code`
