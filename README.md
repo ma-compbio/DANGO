@@ -1,6 +1,6 @@
 # DANGO: Predicting higher-order genetic interactions
 This is the implementation of the algorithm DANGO for the prediction of higher-order genetic interactions.
-This repo contains the code and data for the analysis of the yeast trigenic interactions studied in the manuscript: (coming soon).
+This repo contains the code and data for the analysis of the yeast trigenic interactions studied in [_DANGO: Predicting higher order genetic interactions_](https://www.biorxiv.org/content/10.1101/2020.11.26.400739v2).
 
 ## Requirements
 - h5py
