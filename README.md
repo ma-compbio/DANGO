@@ -65,4 +65,17 @@ The parameters can be configured as described in the above section. A folder nam
 	4. If the `--mode` parameter includes `predict`, the corresponding results would be stored as `XX_tuples.npy`, `XX_y.npy`. Only tuples with predicted signals larger than 0.05 are kept to save space. Based on the `--predict` parameter, `XX`is named as `re_eval`, `within_seen`, `two_seen_one_unseen` respectively.
 	
 ## Cite
+```
+@article{Zhang2020.11.26.400739,
+  title = {{{DANGO}}: {{Predicting}} Higher-Order Genetic Interactions},
+  author = {Zhang, Ruochi and Bafna, Mihir and Ma, Jianzhu and Ma, Jian},
+  year = {2025},
+  journal = {bioRxiv : the preprint server for biology},
+  eprint = {https://www.biorxiv.org/content/early/2025/01/13/2020.11.26.400739.full.pdf},
+  publisher = {Cold Spring Harbor Laboratory},
+  doi = {10.1101/2020.11.26.400739},
+  elocation-id = {2020.11.26.400739}
+}
+```
+
 
