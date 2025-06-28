@@ -61,11 +61,12 @@ def gene_split_2(data, test_id_list):
 	return np.array(train_index), np.array(test_index)
 
 
-def id2baselinevecs(vecs, ids):
+def id2baselinevecs(vecs, ids, type="avg"):
 	final = 0
 	for i in range(ids.shape[-1]):
 		final += vecs[ids[:, i] - 1]
 	return final
+
 
 
 def baseline(train_data, train_y, test_data, test_y):
