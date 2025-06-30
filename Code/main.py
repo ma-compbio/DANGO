@@ -61,45 +61,61 @@ def gene_split_2(data, test_id_list):
 	return np.array(train_index), np.array(test_index)
 
 
-def id2baselinevecs(vecs, ids, type="avg"):
-	final = 0
-	for i in range(ids.shape[-1]):
-		final += vecs[ids[:, i] - 1]
-	return final
+def id2baselinevecs(vecs, ids, type="cat"):
+    vecs_selected = vecs[ids - 1]  # shape: [B, K, D]
+
+    if type == "avg":
+        return vecs_selected.mean(axis=1)  # [B, D]
+    elif type == "cat":
+        return vecs_selected.reshape(vecs_selected.shape[0], -1)  # [B, K*D]
+    else:
+        raise ValueError(f"Unknown type: {type}. Use 'avg' or 'cat'")
 
 
 
-def baseline(train_data, train_y, test_data, test_y):
-	from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-	from xgboost import XGBRegressor, XGBClassifier
+def baseline(train_data, train_y, test_data, test_y, identifier="", random_shuffle=False, agg="cat"):
+    from sklearn.ensemble import RandomForestRegressor
+    from xgboost import XGBRegressor
 
-	print ("start baseline")
-	baseline_vec = np.load("../data/embeddings.npy")
-	if args.random == "True":
-		np.random.shuffle(baseline_vec)
-	baseline_feature_train = id2baselinevecs(baseline_vec, train_data)
-	baseline_feature_test = id2baselinevecs(baseline_vec, test_data)
-	
+    result_file = open("../Temp/%s/result.txt" % (datetime_object), "a")
 
-	xgb = XGBRegressor(n_jobs=cpu_num, n_estimators=500,max_depth=10).fit(baseline_feature_train, train_y)
-	y_pred = xgb.predict(baseline_feature_test)
-	print ("xgboost baseline")
-	print (y_pred.shape, test_y.shape)
-	print(correlation_cuda(test_y, y_pred))
-	pos_mask = test_y >= positive_thres
-	print(correlation_cuda(test_y[pos_mask], y_pred[pos_mask]))
-	print(roc_auc_cuda(pos_mask, y_pred, balance=True))
-	y_pred1 = np.copy(y_pred)
-	
-	rf = RandomForestRegressor(n_jobs=cpu_num, n_estimators=500,max_depth=10).fit(baseline_feature_train, train_y)
-	y_pred = rf.predict(baseline_feature_test)
+    def log(s):
+        print(s)
+        print(s, file=result_file)
 
-	print ("rf baseline")
-	print (correlation_cuda(test_y, y_pred))
-	pos_mask = test_y >= positive_thres
-	print (correlation_cuda(test_y[pos_mask], y_pred[pos_mask]))
-	print(roc_auc_cuda(pos_mask, y_pred, balance=True))
-	return y_pred1, y_pred
+    print("start baseline")
+    baseline_vec = np.load("../data/embeddings.npy")
+    if random_shuffle:
+        np.random.shuffle(baseline_vec)
+
+    baseline_feature_train = id2baselinevecs(baseline_vec, train_data, type=agg)
+    baseline_feature_test = id2baselinevecs(baseline_vec, test_data, type=agg)
+
+    xgb = XGBRegressor(n_jobs=cpu_num, n_estimators=500, max_depth=10).fit(baseline_feature_train, train_y)
+    y_pred = xgb.predict(baseline_feature_test)
+    
+    log(f"baselines with aggregation type {agg}")
+    log("xgboost baseline")
+    print(f"y_pred shape: {y_pred.shape}, test_y shape: {test_y.shape}")
+    log(f"corr (all): {correlation_cuda(test_y, y_pred)}")
+
+    pos_mask = test_y >= positive_thres
+    log(f"corr (pos): {correlation_cuda(test_y[pos_mask], y_pred[pos_mask])}")
+    log(f"roc_auc: {roc_auc_cuda(pos_mask, y_pred, balance=True)}")
+    y_pred1 = np.copy(y_pred)
+
+    rf = RandomForestRegressor(n_jobs=cpu_num, n_estimators=500, max_depth=10).fit(baseline_feature_train, train_y)
+    y_pred = rf.predict(baseline_feature_test)
+
+    log(f"rf baseline {identifier}:")
+    log(f"corr (all): {correlation_cuda(test_y, y_pred)}")
+
+    pos_mask = test_y >= positive_thres
+    log(f"corr (pos): {correlation_cuda(test_y[pos_mask], y_pred[pos_mask])}")
+    log(f"roc_auc: {roc_auc_cuda(pos_mask, y_pred, balance=True)}")
+
+    result_file.close()
+    return y_pred1, y_pred
 
 
 # call subprocess for training a Dango instance (used in multiprocessing)
@@ -119,116 +135,126 @@ def mp_train(positive_thres, gene_num, split_loc, save_dir, save_string, withPPI
 #
 # 	return GP, optimized_kernel
 
-def random_cv_nn_experiments(n_fold=5, rounds=10,debug=False, withPPI=False):
+def random_cv_nn_experiments(n_fold=5, rounds=10,debug=False, withPPI=False, run_baseline=False):
 	print("random_cv_params", n_fold, rounds)
 	kf = KFold(n_splits=n_fold, shuffle=True)
 	f = h5py.File(os.path.join("../Temp/%s/Experiment.hdf5" % datetime_object), "w")
 	result_file = open("../Temp/%s/result.txt" % (datetime_object), "a")
 	cv_count = 0
-	checkpoint_list_all = []
-	# Separating train_valid / test with k-fold
-	for train_valid_index, test_index in kf.split(tuples):
-		# Start multiple training instances
-		pool = ProcessPoolExecutor(max_workers=args.thread)
-		p_list = []
-		checkpoint_list = []
-		grp = f.create_group("Cross_valid_%d" % cv_count)
-		
-		ensemble = 0
-		test_y = y[test_index]
-		save_string_list = []
-		for i in range(rounds):
-			index = torch.randperm(len(train_valid_index))
-			# Randomly separate train and valid 10 times
-			train_index = train_valid_index[index[:int(0.8 * len(index))]]
-			valid_index = train_valid_index[index[int(0.8 * len(index)):]]
+ 
+	if run_baseline:
+		for train_index, test_index in kf.split(tuples):
+			train_data = tuples[train_index]
+			train_y = y[train_index]
+			test_data = tuples[test_index]
+			test_y = y[test_index]
+			baseline(train_data=train_data, train_y=train_y, test_data=test_data,test_y=test_y, agg="avg")
+			baseline(train_data=train_data, train_y=train_y, test_data=test_data,test_y=test_y, agg="cat")
+	else:
+		checkpoint_list_all = []
+		# Separating train_valid / test with k-fold
+		for train_valid_index, test_index in kf.split(tuples):
+			# Start multiple training instances
+			pool = ProcessPoolExecutor(max_workers=args.thread)
+			p_list = []
+			checkpoint_list = []
+			grp = f.create_group("Cross_valid_%d" % cv_count)
 			
-			indexs = np.array([train_index, valid_index, test_index])
-			split_loc = "../Temp/%s/Experiment_%d_%d_ind.npy" % (datetime_object, cv_count, i)
-			save_string = "%d_%d" % (cv_count, i)
-			save_string_list.append(save_string)
-			np.save(split_loc, indexs)
-			if debug:
-				mp_train(positive_thres_origin, gene_num, split_loc, datetime_object,save_string)
-			else:
-				p_list.append(pool.submit(mp_train, positive_thres_origin, gene_num, split_loc, datetime_object,
-										  save_string, withPPI))
-				time.sleep(60)
-		pool.shutdown(wait=True)
-		finish_count = 0
-		print(save_string_list)
-		
-		for save_string in save_string_list:
-			print("Now at Fold %d iteration %d" % (cv_count, finish_count))
-			# Some child process might get killed due to memory/GPU memory usage
-			# Or someone you are sharing the machine with decide to run a gigantic process in the middle
-			# The try / exception here would skip those killed child process
-			# so that you won't get frustrated about running the 5-fold CV from scratch
-			# But if most of teh child process got killed... Run the program again...
+			ensemble = 0
+			test_y = y[test_index]
+			save_string_list = []
+			for i in range(rounds):
+				index = torch.randperm(len(train_valid_index))
+				# Randomly separate train and valid 10 times
+				train_index = train_valid_index[index[:int(0.8 * len(index))]]
+				valid_index = train_valid_index[index[int(0.8 * len(index)):]]
+				
+				indexs = np.array([train_index, valid_index, test_index], dtype=object)
+				split_loc = "../Temp/%s/Experiment_%d_%d_ind.npy" % (datetime_object, cv_count, i)
+				save_string = "%d_%d" % (cv_count, i)
+				save_string_list.append(save_string)
+				np.save(split_loc, indexs)
+				if debug:
+					mp_train(positive_thres_origin, gene_num, split_loc, datetime_object,save_string)
+				else:
+					p_list.append(pool.submit(mp_train, positive_thres_origin, gene_num, split_loc, datetime_object,
+											save_string, withPPI))
+					time.sleep(60)
+			pool.shutdown(wait=True)
+			finish_count = 0
+			print(save_string_list)
+			
+			for save_string in save_string_list:
+				print("Now at Fold %d iteration %d" % (cv_count, finish_count))
+				# Some child process might get killed due to memory/GPU memory usage
+				# Or someone you are sharing the machine with decide to run a gigantic process in the middle
+				# The try / exception here would skip those killed child process
+				# so that you won't get frustrated about running the 5-fold CV from scratch
+				# But if most of teh child process got killed... Run the program again...
+				try:
+					ckpt_list = list(
+						torch.load("../Temp/%s/%s_model_list" % (datetime_object, save_string), map_location='cpu'))
+					ensemble_part = np.load("../Temp/%s/ensemble_%s.npy" % (datetime_object, save_string))
+					finish_count += 1
+					checkpoint_list += list(ckpt_list)
+					ensemble += ensemble_part
+				except:
+					print("some training instances got killed")
+
+			if finish_count == 0:
+				finish_count = 1
+			ensemble /= finish_count
+
+			print("ensemble at Fold %d" % cv_count)
+			corr1, corr2 = correlation_cuda(test_y, ensemble)
+			pos_mask = test_y >= positive_thres
+			corr1_pos, corr2_pos = correlation_cuda(test_y[pos_mask], ensemble[pos_mask])
+			roc, aupr = roc_auc_cuda(pos_mask, ensemble, balance=True)
+			print("Pearson, Spearman")
+			print(corr1, corr2)
+			print("Pearson_strong, Spearman_strong")
+			print(corr1_pos, corr2_pos)
+			print("AUC, AUPR")
+			print(roc, aupr)
+			sys.stdout.flush()
+
+			corr1, corr2 = correlation_cuda(test_y, ensemble)
+			pos_mask = test_y >= positive_thres
+			corr1_pos, corr2_pos = correlation_cuda(test_y[pos_mask], ensemble[pos_mask])
+			roc, aupr = roc_auc_cuda(pos_mask, ensemble, balance=True)
+			result_file.write("Fold %d\n" % (cv_count))
+			metrics = [corr1, corr2, corr1_pos, corr2_pos, roc, aupr]
+			for score in metrics:
+				print("writing score:" + str(score))
+				result_file.write("%f\n" % score)
+				result_file.flush()
+			print("Start saving")
+			# grp.create_dataset("train_index", data=train_index)
+			# grp.create_dataset("valid_index", data=valid_index)
+			# grp.create_dataset("test_index", data=test_index)
+			
+			new_checkpoint_dict = {}
+			for i, c in enumerate(checkpoint_list):
+				new_checkpoint_dict['model_link_%d' % i] = c['model_link']
+			
+			torch.save(new_checkpoint_dict, "../Temp/%s/Experiment_model_CV_%d" % (datetime_object, cv_count))
+			checkpoint_list_all += checkpoint_list
+			temp = ensemble
 			try:
-				ckpt_list = list(
-					torch.load("../Temp/%s/%s_model_list" % (datetime_object, save_string), map_location='cpu'))
-				ensemble_part = np.load("../Temp/%s/ensemble_%s.npy" % (datetime_object, save_string))
-				finish_count += 1
-				checkpoint_list += list(ckpt_list)
-				ensemble += ensemble_part
+				temp = temp.cpu().numpy()
+				test_y = test_y.cpu().numpy()
 			except:
-				print("some training instances got killed")
-
-		if finish_count == 0:
-			finish_count = 1
-		ensemble /= finish_count
-
-		print("ensemble at Fold %d" % cv_count)
-		corr1, corr2 = correlation_cuda(test_y, ensemble)
-		pos_mask = test_y >= positive_thres
-		corr1_pos, corr2_pos = correlation_cuda(test_y[pos_mask], ensemble[pos_mask])
-		roc, aupr = roc_auc_cuda(pos_mask, ensemble, balance=True)
-		print("Pearson, Spearman")
-		print(corr1, corr2)
-		print("Pearson_strong, Spearman_strong")
-		print(corr1_pos, corr2_pos)
-		print("AUC, AUPR")
-		print(roc, aupr)
-		sys.stdout.flush()
-
-		corr1, corr2 = correlation_cuda(test_y, ensemble)
-		pos_mask = test_y >= positive_thres
-		corr1_pos, corr2_pos = correlation_cuda(test_y[pos_mask], ensemble[pos_mask])
-		roc, aupr = roc_auc_cuda(pos_mask, ensemble, balance=True)
-		result_file.write("Fold %d\n" % (cv_count))
-		metrics = [corr1, corr2, corr1_pos, corr2_pos, roc, aupr]
-		for score in metrics:
-			print("writing score:" + str(score))
-			result_file.write("%f\n" % score)
-			result_file.flush()
-		print("Start saving")
-		# grp.create_dataset("train_index", data=train_index)
-		# grp.create_dataset("valid_index", data=valid_index)
-		# grp.create_dataset("test_index", data=test_index)
-		
-		new_checkpoint_dict = {}
-		for i, c in enumerate(checkpoint_list):
-			new_checkpoint_dict['model_link_%d' % i] = c['model_link']
-		
-		torch.save(new_checkpoint_dict, "../Temp/%s/Experiment_model_CV_%d" % (datetime_object, cv_count))
-		checkpoint_list_all += checkpoint_list
-		temp = ensemble
-		try:
-			temp = temp.cpu().numpy()
-			test_y = test_y.cpu().numpy()
-		except:
-			pass
-		grp.create_dataset("predicted", data=temp)
-		
-		grp.create_dataset("ensemble_inverse", data=scalar.inverse_transform(temp.reshape((-1, 1))).reshape((-1)))
-		grp.create_dataset("test_y_inverse", data=scalar.inverse_transform(test_y.reshape((-1, 1))).reshape((-1)))
-		
-		cv_count += 1
-	torch.save(checkpoint_list_all, "../Temp/%s/Experiment_model_list" % (datetime_object))
-	result_file.close()
-	f.close()
-	# return metrics
+				pass
+			grp.create_dataset("predicted", data=temp)
+			
+			grp.create_dataset("ensemble_inverse", data=scalar.inverse_transform(temp.reshape((-1, 1))).reshape((-1)))
+			grp.create_dataset("test_y_inverse", data=scalar.inverse_transform(test_y.reshape((-1, 1))).reshape((-1)))
+			
+			cv_count += 1
+		torch.save(checkpoint_list_all, "../Temp/%s/Experiment_model_list" % (datetime_object))
+		result_file.close()
+		f.close()
+		# return metrics
 
 	
 def gene_split_nn_experiments(rounds=10, n_genes=40, strict=False, withPPI=False):
@@ -258,7 +284,7 @@ def gene_split_nn_experiments(rounds=10, n_genes=40, strict=False, withPPI=False
 		train_index = index[:int(0.8 * len(index))]
 		valid_index = index[int(0.8 * len(index)):]
 		print("train/valid/test data shape", train_index.shape, valid_index.shape, test_index.shape)
-		indexs = np.array([train_index, valid_index, test_index])
+		indexs = np.array([train_index, valid_index, test_index], dtype=object)
 		split_loc = "../Temp/%s/Experiment_%d_ind.npy" % (datetime_object, i)
 		save_string = "%d" % (i)
 		save_string_list.append(save_string)
@@ -296,7 +322,8 @@ def gene_split_nn_experiments(rounds=10, n_genes=40, strict=False, withPPI=False
 	sys.stdout.flush()
 	metrics = [corr1, corr2, corr1_pos, corr2_pos, roc, aupr]
 	print(metrics)
-	with open("../Temp/%s/result.txt" %(datetime_object), "a") as result_file:
+	split = 1 if not strict else 2
+	with open(f"../Temp/{datetime_object}/result_split{split}.txt", "a") as result_file:
 		result_file.write("gene split\n")
 		for score in metrics:
 			result_file.write("%f\n" %(score))
@@ -315,7 +342,8 @@ def whole_dataset_train(rounds=10, withPPI=False):
 		train_index = index[:int(0.9 * len(index))]
 		valid_index = index[int(0.9 * len(index)):]
 		test_index = valid_index
-		indexs = np.array([train_index, valid_index, test_index])
+		indexs = np.array([train_index, valid_index, test_index], dtype=object)
+		print(indexs)
 		split_loc = "../Temp/%s/Experiment_%d_ind.npy" % (datetime_object, i)
 		save_string = "%d" % (i)
 		save_string_list.append(save_string)
@@ -604,7 +632,7 @@ if __name__ == '__main__':
 		metrics = None
 		if args.split == 0:
 			print("Evaluating on split 0")
-			random_cv_nn_experiments(2, 1,withPPI=withprotein)
+			random_cv_nn_experiments(5, 1,withPPI=withprotein)
 		elif args.split == 1:
 			print("Evaluating on split 1")
 			gene_split_nn_experiments(10, 40, False, withPPI=withprotein)
@@ -615,6 +643,17 @@ if __name__ == '__main__':
 			pass
 	elif 'train' in args.mode:
 		whole_dataset_train(10)
+	elif "baseline" in args.mode:
+		if args.split == 0:
+			print("Evaluating on split 0")
+			random_cv_nn_experiments(2, 1,withPPI=withprotein, run_baseline=True)
+		# elif args.split == 1:
+		# 	print("Evaluating on split 1")
+		# 	gene_split_nn_experiments(10, 40, False, withPPI=withprotein,  run_baseline=True)
+		# elif args.split == 2:
+		# 	print("Evaluating on split 2")
+		# 	gene_split_nn_experiments(10, 400, True, withPPI=withprotein,  run_baseline=True)
+   
 	elif 'predict' in args.mode:
 		if args.modelfolder is not None and os.path.exists("../Temp/%s" % args.modelfolder):
 			ckpt_list = list(torch.load("../Temp/%s/Experiment_model_list" % args.modelfolder, map_location='cpu'))
@@ -623,13 +662,13 @@ if __name__ == '__main__':
 		dango_list = create_dango_list(ckpt_list)
 
 		if args.predict == 0:
-			print("Evaluating on split 0")
+			print("Predicting on split 0")
 			re_evaluate(tuples, dango_list)
 		elif args.predict == 1:
-			print("Evaluating on split 1")
+			print("Predicting on split 1")
 			within_seen_genes(tuples, dango_list)
 		elif args.predict == 2:
-			print("Evaluating on split 2")
+			print("Predicting on split 2")
 			two_seen_one_unseen_genes(tuples, dango_list)
 		else:
 			pass

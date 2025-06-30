@@ -460,6 +460,7 @@ if __name__ == '__main__':
 
         # Get the training/valid/testing indexes
         indexs = np.load(split_loc, allow_pickle=True)
+        print("after loading",indexs)
         train_index, valid_index, test_index = indexs[0], indexs[1], indexs[2]
 
         train_data = tuples[train_index]

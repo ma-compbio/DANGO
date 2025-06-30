@@ -13,7 +13,7 @@ def generate_neighbor_list(input, gene_num):
         neighbor_list[datum[1]].append(datum[0])
 
     neighbor_list = [list(set(nb)) + [i] for i, nb in enumerate(neighbor_list)]
-    return np.array(neighbor_list)
+    return np.array(neighbor_list, dtype=object)
 
 
 def generate_neighbor_list_with_weight(input, gene_num):
