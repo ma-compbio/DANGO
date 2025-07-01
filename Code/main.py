@@ -1,5 +1,6 @@
 import torch
 import os
+import pandas as pd
 
 # os.environ["device"] = 'gpu' # default value (this will be overridden)
 import argparse
@@ -77,13 +78,12 @@ def baseline(train_data, train_y, test_data, test_y, identifier="", random_shuff
     from sklearn.ensemble import RandomForestRegressor
     from xgboost import XGBRegressor
 
-    result_file = open("../Temp/%s/result.txt" % (datetime_object), "a")
-
+    result_file = open("../Temp/%s/result.txt" % (datetime_object), "w")
     def log(s):
         print(s)
         print(s, file=result_file)
 
-    print("start baseline")
+    log(f"start baseline with aggregation type {agg}")
     baseline_vec = np.load("../data/embeddings.npy")
     if random_shuffle:
         np.random.shuffle(baseline_vec)
@@ -91,31 +91,49 @@ def baseline(train_data, train_y, test_data, test_y, identifier="", random_shuff
     baseline_feature_train = id2baselinevecs(baseline_vec, train_data, type=agg)
     baseline_feature_test = id2baselinevecs(baseline_vec, test_data, type=agg)
 
+    # ---------- XGBoost ----------
     xgb = XGBRegressor(n_jobs=cpu_num, n_estimators=500, max_depth=10).fit(baseline_feature_train, train_y)
-    y_pred = xgb.predict(baseline_feature_test)
-    
-    log(f"baselines with aggregation type {agg}")
-    log("xgboost baseline")
-    print(f"y_pred shape: {y_pred.shape}, test_y shape: {test_y.shape}")
-    log(f"corr (all): {correlation_cuda(test_y, y_pred)}")
+    y_pred_xgb = xgb.predict(baseline_feature_test)
 
+    corr_all_xgb = correlation_cuda(test_y, y_pred_xgb)
     pos_mask = test_y >= positive_thres
-    log(f"corr (pos): {correlation_cuda(test_y[pos_mask], y_pred[pos_mask])}")
-    log(f"roc_auc: {roc_auc_cuda(pos_mask, y_pred, balance=True)}")
-    y_pred1 = np.copy(y_pred)
+    corr_pos_xgb = correlation_cuda(test_y[pos_mask], y_pred_xgb[pos_mask])
+    auc_xgb = roc_auc_cuda(pos_mask, y_pred_xgb, balance=True)
 
+    log("xgboost baseline")
+    log(f"corr (all): {corr_all_xgb}")
+    log(f"corr (pos): {corr_pos_xgb}")
+    log(f"roc_auc: {auc_xgb}")
+
+    # ---------- Random Forest ----------
     rf = RandomForestRegressor(n_jobs=cpu_num, n_estimators=500, max_depth=10).fit(baseline_feature_train, train_y)
-    y_pred = rf.predict(baseline_feature_test)
+    y_pred_rf = rf.predict(baseline_feature_test)
+
+    corr_all_rf = correlation_cuda(test_y, y_pred_rf)
+    corr_pos_rf = correlation_cuda(test_y[pos_mask], y_pred_rf[pos_mask])
+    auc_rf = roc_auc_cuda(pos_mask, y_pred_rf, balance=True)
 
     log(f"rf baseline {identifier}:")
-    log(f"corr (all): {correlation_cuda(test_y, y_pred)}")
-
-    pos_mask = test_y >= positive_thres
-    log(f"corr (pos): {correlation_cuda(test_y[pos_mask], y_pred[pos_mask])}")
-    log(f"roc_auc: {roc_auc_cuda(pos_mask, y_pred, balance=True)}")
+    log(f"corr (all): {corr_all_rf}")
+    log(f"corr (pos): {corr_pos_rf}")
+    log(f"roc_auc: {auc_rf}")
 
     result_file.close()
-    return y_pred1, y_pred
+
+    return {
+        "xgb_pearson_all": corr_all_xgb[0],
+        "xgb_spearman_all": corr_all_xgb[1],
+        "xgb_pearson_pos": corr_pos_xgb[0],
+        "xgb_spearman_pos": corr_pos_xgb[1],
+        "xgb_auroc": auc_xgb[0],
+        "xgb_auprc": auc_xgb[1],
+        "rf_pearson_all": corr_all_rf[0],
+        "rf_spearman_all": corr_all_rf[1],
+        "rf_pearson_pos": corr_pos_rf[0],
+        "rf_spearman_pos": corr_pos_rf[1],
+        "rf_auroc": auc_rf[0],
+        "rf_auprc": auc_rf[1],
+    }
 
 
 # call subprocess for training a Dango instance (used in multiprocessing)
@@ -143,13 +161,32 @@ def random_cv_nn_experiments(n_fold=5, rounds=10,debug=False, withPPI=False, run
 	cv_count = 0
  
 	if run_baseline:
+		results_avg = []
+		results_cat = []
+
 		for train_index, test_index in kf.split(tuples):
 			train_data = tuples[train_index]
 			train_y = y[train_index]
 			test_data = tuples[test_index]
 			test_y = y[test_index]
-			baseline(train_data=train_data, train_y=train_y, test_data=test_data,test_y=test_y, agg="avg")
-			baseline(train_data=train_data, train_y=train_y, test_data=test_data,test_y=test_y, agg="cat")
+
+			res_avg = baseline(train_data=train_data, train_y=train_y, test_data=test_data, test_y=test_y, agg="avg")
+			res_cat = baseline(train_data=train_data, train_y=train_y, test_data=test_data, test_y=test_y, agg="cat")
+
+			results_avg.append(res_avg)
+			results_cat.append(res_cat)
+
+		df_avg = pd.DataFrame(results_avg)
+		df_cat = pd.DataFrame(results_cat)
+		mean_avg = df_avg.mean()
+		mean_cat = df_cat.mean()
+
+		print("\nAverage Metrics (agg='avg'):", file=result_file)
+		print(mean_avg, file=result_file)
+
+		print("\nAverage Metrics (agg='cat'):", file=result_file)
+		print(mean_cat, file=result_file)
+
 	else:
 		checkpoint_list_all = []
 		# Separating train_valid / test with k-fold
@@ -257,12 +294,14 @@ def random_cv_nn_experiments(n_fold=5, rounds=10,debug=False, withPPI=False, run
 		# return metrics
 
 	
-def gene_split_nn_experiments(rounds=10, n_genes=40, strict=False, withPPI=False):
+def gene_split_nn_experiments(rounds=10, n_genes=40, strict=False, withPPI=False, run_baseline=False):
 	genes_avail = np.unique(tuples)
 	np.random.seed(43)
 	np.random.shuffle(genes_avail)
 	test_gene = genes_avail[:n_genes]
 	
+	result_file = open("../Temp/%s/result.txt" % (datetime_object), "a")
+ 
 	# Split the train_valid / test based on genes
 	if strict:
 		train_valid_index, test_index = gene_split_2(tuples, test_gene)
@@ -272,37 +311,53 @@ def gene_split_nn_experiments(rounds=10, n_genes=40, strict=False, withPPI=False
 	test_y = y[test_index]
 	
 	
+	if run_baseline:
 
-	checkpoint_list = []
-	save_string_list = []
-	ensemble = 0
-	pool = ProcessPoolExecutor(max_workers=args.thread)
-	p_list = []
-	for i in range(rounds):
-		print ("round %d" % i)
-		index = np.random.permutation(train_valid_index)
-		train_index = index[:int(0.8 * len(index))]
-		valid_index = index[int(0.8 * len(index)):]
-		print("train/valid/test data shape", train_index.shape, valid_index.shape, test_index.shape)
-		indexs = np.array([train_index, valid_index, test_index], dtype=object)
-		split_loc = "../Temp/%s/Experiment_%d_ind.npy" % (datetime_object, i)
-		save_string = "%d" % (i)
-		save_string_list.append(save_string)
-		np.save(split_loc, indexs)
-		p_list.append(
-			pool.submit(mp_train, positive_thres_origin, gene_num, split_loc, datetime_object, save_string, withPPI))
-		time.sleep(60)
-	pool.shutdown(wait=True)
+		train_data = tuples[train_valid_index]
+		train_y = y[train_valid_index]
+		test_data = tuples[test_index]
+		test_y = y[test_index]
 
-	for save_string in save_string_list:
-		try:
-			ckpt_list = list(torch.load("../Temp/%s/%s_model_list" % (datetime_object, save_string)))
-			checkpoint_list += ckpt_list
-			ensemble_part = np.load("../Temp/%s/ensemble_%s.npy" % (datetime_object, save_string))
-			checkpoint_list += list(ckpt_list)
-			ensemble += ensemble_part
-		except:
-			pass
+		res_avg = baseline(train_data=train_data, train_y=train_y, test_data=test_data, test_y=test_y, agg="avg")
+		res_cat = baseline(train_data=train_data, train_y=train_y, test_data=test_data, test_y=test_y, agg="cat")
+
+		print("\nAverage Metrics (agg='avg'):", file=result_file)
+		print(res_avg, file=result_file)
+
+		print("\nAverage Metrics (agg='cat'):", file=result_file)
+		print(res_cat, file=result_file)
+  
+	else:
+		checkpoint_list = []
+		save_string_list = []
+		ensemble = 0
+		pool = ProcessPoolExecutor(max_workers=args.thread)
+		p_list = []
+		for i in range(rounds):
+			print ("round %d" % i)
+			index = np.random.permutation(train_valid_index)
+			train_index = index[:int(0.8 * len(index))]
+			valid_index = index[int(0.8 * len(index)):]
+			print("train/valid/test data shape", train_index.shape, valid_index.shape, test_index.shape)
+			indexs = np.array([train_index, valid_index, test_index], dtype=object)
+			split_loc = "../Temp/%s/Experiment_%d_ind.npy" % (datetime_object, i)
+			save_string = "%d" % (i)
+			save_string_list.append(save_string)
+			np.save(split_loc, indexs)
+			p_list.append(
+				pool.submit(mp_train, positive_thres_origin, gene_num, split_loc, datetime_object, save_string, withPPI))
+			time.sleep(60)
+		pool.shutdown(wait=True)
+
+		for save_string in save_string_list:
+			try:
+				ckpt_list = list(torch.load("../Temp/%s/%s_model_list" % (datetime_object, save_string)))
+				checkpoint_list += ckpt_list
+				ensemble_part = np.load("../Temp/%s/ensemble_%s.npy" % (datetime_object, save_string))
+				checkpoint_list += list(ckpt_list)
+				ensemble += ensemble_part
+			except:
+				pass
 
 
 	ensemble /= rounds
@@ -647,12 +702,12 @@ if __name__ == '__main__':
 		if args.split == 0:
 			print("Evaluating on split 0")
 			random_cv_nn_experiments(2, 1,withPPI=withprotein, run_baseline=True)
-		# elif args.split == 1:
-		# 	print("Evaluating on split 1")
-		# 	gene_split_nn_experiments(10, 40, False, withPPI=withprotein,  run_baseline=True)
-		# elif args.split == 2:
-		# 	print("Evaluating on split 2")
-		# 	gene_split_nn_experiments(10, 400, True, withPPI=withprotein,  run_baseline=True)
+		elif args.split == 1:
+			print("Evaluating on split 1")
+			gene_split_nn_experiments(10, 40, False, withPPI=withprotein,  run_baseline=True)
+		elif args.split == 2:
+			print("Evaluating on split 2")
+			gene_split_nn_experiments(10, 400, True, withPPI=withprotein,  run_baseline=True)
    
 	elif 'predict' in args.mode:
 		if args.modelfolder is not None and os.path.exists("../Temp/%s" % args.modelfolder):
