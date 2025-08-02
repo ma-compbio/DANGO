@@ -69,6 +69,7 @@ def get_model(gene_num, embed_dim, auxi_m, auxi_adj, withPPI=False):
         node_embedding = MetaEmbedding(embed_list=embed_list,
                                        dim=embed_dim).to(device)
 
+
     hypersagnn = Hyper_SAGNN(
         n_head=8,
         d_model=embed_dim,
@@ -80,19 +81,36 @@ def get_model(gene_num, embed_dim, auxi_m, auxi_adj, withPPI=False):
     return graphsage_embedding, recon_nn, node_embedding, hypersagnn, PPI_embedding
 
 
-# Get the baseline model
-def get_baseline_model(gene_num, embed_dim, auxi_m, auxi_adj):
+def get_baseline_model(gene_num, embed_dim, auxi_m, auxi_adj, mode="avg"):
+    """
+    mode: str, either "avg" or "meta"
+        "avg"  → use MetaEmbedding_Avg before MLP
+        "meta" → use full MetaEmbedding before MLP
+    """
     first_embedding = torch.nn.Embedding(gene_num, embed_dim, padding_idx=0).to(device)
     print("embedding size", gene_num, embed_dim)
-    graphsage_embedding = [GraphEncoder(features=first_embedding, feature_dim=embed_dim,
-                                        embed_dim=embed_dim,
-                                        neighbor_list=generate_neighbor_list(auxi_m[i],
-                                                                             gene_num),
-                                        num_sample=5, gcn=True).to(device) for i in range(len(auxi_m))]
 
-    recon_nn = [FeedForward([embed_dim, embed_dim, adj.shape[-1]]).to(device) for adj in auxi_adj]
-    node_embedding = MetaEmbedding_Avg(embed_list=graphsage_embedding,
-                                       dim=embed_dim).to(device)
+    graphsage_embedding = [
+        GraphEncoder(features=first_embedding, feature_dim=embed_dim,
+                     embed_dim=embed_dim,
+                     neighbor_list=generate_neighbor_list(auxi_m[i], gene_num),
+                     num_sample=5, gcn=True).to(device)
+        for i in range(len(auxi_m))
+    ]
 
-    hypersagnn = average_MLP(embed_dim, 1, embed=node_embedding).to(device)
-    return graphsage_embedding, recon_nn, node_embedding, hypersagnn
+    recon_nn = [
+        FeedForward([embed_dim, embed_dim, adj.shape[-1]]).to(device)
+        for adj in auxi_adj
+    ]
+    if mode == "avg":
+        print("Using MLP ablation with averaged embeddings (MetaEmbedding_Avg)")
+        node_embedding = MetaEmbedding_Avg(embed_list=graphsage_embedding, dim=embed_dim).to(device)
+    elif mode == "meta":
+        print("Using MLP ablation with MetaEmbedding (no averaging)")
+        node_embedding = MetaEmbedding(embed_list=graphsage_embedding, dim=embed_dim).to(device)
+    else:
+        raise ValueError(f"Invalid mode '{mode}'. Use 'avg' or 'meta'.")
+
+    model = MLP(d_model=embed_dim, node_embedding=node_embedding).to(device)
+
+    return graphsage_embedding, recon_nn, node_embedding, model, None # ppi nn

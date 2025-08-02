@@ -346,10 +346,18 @@ def pre_train(embed_nn_list, recon_nn_list, recon_adj_list, optimizer, epochs, b
 
 
 def one_training_procedure(train_data, valid_data, test_data, gene_num, withPPI=False):
-    # graphsage_embedding, recon_nn, node_embedding, hypersagnn = get_baseline_model(gene_num, embed_dim, auxi_m, auxi_adj)
-    graphsage_embedding, recon_nn, node_embedding, hypersagnn, PPI_nn = get_model(gene_num, embed_dim, auxi_m, auxi_adj, withPPI)
-    print(hypersagnn)
-    print(f"num of gcns: {len(graphsage_embedding)}")
+    baseline = False
+    if baseline:
+        mode = "meta"
+        graphsage_embedding, recon_nn, node_embedding, hypersagnn, PPI_nn = get_baseline_model(gene_num, embed_dim, auxi_m, auxi_adj, mode=mode)
+        print(hypersagnn)
+        print(f"BASELINE GCN-{mode.upper()}-DNN loaded...")
+
+    else:
+        graphsage_embedding, recon_nn, node_embedding, hypersagnn, PPI_nn = get_model(gene_num, embed_dim, auxi_m, auxi_adj, withPPI)
+        print(hypersagnn)
+        print(f"num of gcns: {len(graphsage_embedding)}")
+
     if withPPI:
         print("Included PPI Embeddings in DANGO Pre-training...")
 

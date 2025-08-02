@@ -187,6 +187,46 @@ class MetaEmbeddingPPI(nn.Module):
         return embed
 
 
+class MLP(nn.Module):
+    def __init__(self, d_model, node_embedding):
+        super().__init__()
+        self.node_embedding = node_embedding
+
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.ReLU(),
+            nn.Dropout(0.25),
+            nn.Linear(d_model, 1)
+        )
+
+    def get_embedding(self, x):
+        x = self.node_embedding(x)
+        return x
+
+    def forward(self, x, mask=None):
+        x = x.long()
+        non_pad_mask = get_non_pad_mask(x)
+        x = self.get_embedding(x)
+        x = self.ffn(x)
+        x = x * non_pad_mask
+        x = torch.sum(x, dim=-2)
+        return x
+
+    def predict(self, input, verbose=False, batch_size=960):
+        self.eval()
+        with torch.no_grad():
+            output = []
+            iterator = trange if verbose else range
+            for j in iterator(math.ceil(len(input) / batch_size)):
+                x = input[j * batch_size: (j + 1) * batch_size]
+                output.append(self(x))
+            output = torch.cat(output, dim=0)
+            torch.cuda.empty_cache()
+        self.train()
+        return output
+    
+    
+
 class Hyper_SAGNN(nn.Module):
     def __init__(
             self,
