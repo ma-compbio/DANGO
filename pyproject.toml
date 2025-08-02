@@ -1,0 +1,18 @@
+[project]
+name = "dango"
+version = "0.1.0"
+description = "higher order genetic interaction prediction"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "gpustat>=1.1.1",
+    "gpytorch>=1.13",
+    "h5py>=3.11.0",
+    "matplotlib>=3.7.5",
+    "pandas>=2.0.3",
+    "pybloom-live>=4.0.0",
+    "scikit-learn>=1.3.2",
+    "torch==2.3.0",
+    "tqdm>=4.67.1",
+    "xgboost>=2.1.4",
+]

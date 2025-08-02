@@ -60,7 +60,7 @@ def get_model(gene_num, embed_dim, auxi_m, auxi_adj, withPPI=False):
                                        dim=embed_dim, ppi_nn=PPI_embedding).to(device)
     elif onlyPPI:
         print("Creating Protein Embedding Only Autoencoder")
-        og_embeddings = torch.from_numpy(np.load("../data/ppi_embeddings.npy")).to(device)
+        og_embeddings = torch.from_numpy(np.load("../data/prose_embeddings.npy")).to(device)
         PPI_embedding = PPIAutoEncoder(input_dim=og_embeddings.shape[1], embed_dim=embed_dim, og_embeddings=og_embeddings).to(device)
         node_embedding = MetaEmbeddingPPI(embed_list=[],
                                        dim=embed_dim, ppi_nn=PPI_embedding).to(device)

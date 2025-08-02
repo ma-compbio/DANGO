@@ -98,6 +98,7 @@ def train_epoch(model, embed_nn_list, recon_nn_list, data, recon_adj_list, optim
 
         beta = 0.001 if isinstance(model, Hyper_SAGNN) else 0
         loss = loss_regress + loss_recon * beta + beta * loss_ppi
+        # loss = loss_regress + loss_recon + loss_ppi       # for no weighted mse ablation
 
         optimizer.zero_grad()
 
@@ -168,6 +169,7 @@ def eval_epoch(model, embed_nn_list, recon_nn_list, data, recon_adj_list, optimi
                                 (total_loss_main / (i + 1), total_loss_recon / (i + 1)), refresh=False)
             total_loss_main += loss_regress.item()
             total_loss_recon += loss_recon.item()
+
 
         y = torch.cat(y_list)
         pred = torch.cat(pred_list)
@@ -324,19 +326,18 @@ def pre_train(embed_nn_list, recon_nn_list, recon_adj_list, optimizer, epochs, b
 
             for j, (embed_nn, recon_nn, recon_adj) in enumerate(zip(embed_nn_list, recon_nn_list, recon_adj_list)):
                 loss_recon += forward_batch_recon(embed_nn, recon_nn, batch_data, recon_adj, lambda_list[j])
-            loss = loss_recon
 
             if ppi_nn is not None:
                 ppi_nn.to(device)
                 original_indices = batch_data.long()
                 encodings = ppi_nn(original_indices.to(device))
                 preds = ppi_nn.decode(encodings.to(device).float())
-                loss += ppi_nn.loss(preds, original_indices, nn.MSELoss())
+                loss_recon += ppi_nn.loss(preds, original_indices, nn.MSELoss())
 
             optimizer.zero_grad()
 
             # backward
-            loss.backward()
+            loss_recon.backward()
 
             # update parameters
             optimizer.step()
@@ -347,7 +348,8 @@ def pre_train(embed_nn_list, recon_nn_list, recon_adj_list, optimizer, epochs, b
 def one_training_procedure(train_data, valid_data, test_data, gene_num, withPPI=False):
     # graphsage_embedding, recon_nn, node_embedding, hypersagnn = get_baseline_model(gene_num, embed_dim, auxi_m, auxi_adj)
     graphsage_embedding, recon_nn, node_embedding, hypersagnn, PPI_nn = get_model(gene_num, embed_dim, auxi_m, auxi_adj, withPPI)
-
+    print(hypersagnn)
+    print(f"num of gcns: {len(graphsage_embedding)}")
     if withPPI:
         print("Included PPI Embeddings in DANGO Pre-training...")
 
@@ -474,12 +476,14 @@ if __name__ == '__main__':
         test_sign = significance[test_index]
 
         print("train/valid/test data shape", train_data.shape, valid_data.shape, test_data.shape)
-
-        # This is building the adjacency matrix for the GCN
-        auxi_m = [np.load("../data/%s" % name) for name in
-                  ['coexpression.npy', 'experimental.npy',
+        networks = ['coexpression.npy', 'experimental.npy',
                    'database.npy', 'neighborhood.npy',
-                   'fusion.npy', 'cooccurence.npy']]
+                   'fusion.npy', 'cooccurence.npy']
+        # This is building the adjacency matrix for the GCN
+        auxi_m = [np.load("../data/%s" % name) for name in networks]
+        # auxi_m = [np.load("../data/%s" % name) for name in
+        #     ['coexpression.npy', 'experimental.npy','database.npy','fusion.npy', 'neighborhood.npy']]
+        print(networks)
         lambda_list = [0.1, 0.1, 1.0, 1.0, 1.0, 1.0]
         # lambda_list = [0.1, 0.1, 1.0, 1.0, 1.0, 1.0, 1.0]
         # lambda_list = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]

@@ -630,9 +630,10 @@ def re_evaluate(pos_tuple_list, dango_list):
 
 if __name__ == '__main__':
 	# Basic parameters for training
-	# devices = get_free_gpus(2)
+	devices = get_free_gpus(1)
 	# devices = [7]
-	devices = [int(os.environ["device"])]
+	# devices = [int(os.environ["device"])]
+	# devices = [2]
 	os.environ["protein_embedding_path"] = args.withprotein if args.withprotein else ""
 	withprotein = True if args.withprotein else False
  
