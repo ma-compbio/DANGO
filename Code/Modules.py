@@ -195,7 +195,6 @@ class MLP(nn.Module):
         self.ffn = nn.Sequential(
             nn.Linear(d_model, d_model),
             nn.ReLU(),
-            nn.Dropout(0.25),
             nn.Linear(d_model, 1)
         )
 

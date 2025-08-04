@@ -66,8 +66,8 @@ def get_model(gene_num, embed_dim, auxi_m, auxi_adj, withPPI=False):
                                        dim=embed_dim, ppi_nn=PPI_embedding).to(device)
         # node_embedding = PPI_embedding
     else:
-        node_embedding = MetaEmbedding(embed_list=embed_list,
-                                       dim=embed_dim).to(device)
+        node_embedding = MetaEmbedding(embed_list=embed_list, dim=embed_dim).to(device)
+        # node_embedding = MetaEmbedding_Avg(embed_list=embed_list, dim=embed_dim).to(device)
 
 
     hypersagnn = Hyper_SAGNN(
