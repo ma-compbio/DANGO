@@ -10,6 +10,7 @@ dependencies = [
     "h5py>=3.11.0",
     "matplotlib>=3.7.5",
     "pandas>=2.0.3",
+    "plotly>=6.3.0",
     "pybloom-live>=4.0.0",
     "scikit-learn>=1.3.2",
     "torch==2.3.0",

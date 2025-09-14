@@ -104,6 +104,7 @@ def baseline(train_data, train_y, test_data, test_y, identifier="", random_shuff
     log(f"corr (all): {corr_all_xgb}")
     log(f"corr (pos): {corr_pos_xgb}")
     log(f"roc_auc: {auc_xgb}")
+    
 
     # ---------- Random Forest ----------
     rf = RandomForestRegressor(n_jobs=cpu_num, n_estimators=500, max_depth=10).fit(baseline_feature_train, train_y)
@@ -610,7 +611,7 @@ def two_seen_one_unseen_genes(pos_tuple_list, dango_list):
 
 
 # predict on the original set
-def re_evaluate(pos_tuple_list, dango_list):
+def re_evaluate(pos_tuple_list, dango_list, y_true):
 	chunks = pos_tuple_list
 	chunks = torch.from_numpy(chunks).long().to(device)
 	pred_y = ensemble_predict(dango_list, chunks)
@@ -624,8 +625,10 @@ def re_evaluate(pos_tuple_list, dango_list):
 	# if len(select_chunks) > 0:
 	final_tuples = select_chunks
 	final_y = pred_y[selected]
+	y_true = y_true[selected]
 	np.save("../Temp/%s/re_eval_tuples.npy" % datetime_object, final_tuples)
-	np.save("../Temp/%s/re_eval_y.npy" % datetime_object, final_y)
+	np.save("../Temp/%s/re_eval_y_pred.npy" % datetime_object, final_y)
+	np.save("../Temp/%s/re_eval_y_true_selected.npy" % datetime_object, y_true)
 
 
 if __name__ == '__main__':
@@ -695,6 +698,41 @@ if __name__ == '__main__':
 		elif args.split == 2:
 			print("Evaluating on split 2")
 			gene_split_nn_experiments(10, 400, True, withPPI=withprotein)
+		elif args.predict == 3:
+			print("Evaluating digenic interactions")
+   
+			if args.modelfolder is not None and os.path.exists("../Temp/%s" % args.modelfolder):	#using pretrained model
+				ckpt_list = list(torch.load("../Temp/%s/Experiment_model_list" % args.modelfolder, map_location='cpu'))
+			else:
+				ckpt_list = list(torch.load("../Temp/%s/Experiment_model_list" % datetime_object, map_location='cpu'))
+    
+			dango_list = create_dango_list(ckpt_list)
+   
+			# --- Load digenic data ---
+			pairs = np.load("../data/pairs.npy").astype('int')          # shape: (N, 2)
+			pair_y = np.load("../data/pair_y.npy").astype('float32')    # shape: (N,)
+			pair_sign = np.load("../data/pair_sign.npy").astype('float32')
+
+			# --- Negate labels since most values are negative ---
+			pair_y = -pair_y
+
+			print("num y above threshold (raw):", 
+				np.sum(np.abs(pair_y) > positive_thres),
+				np.sum(pair_y > positive_thres),
+				np.sum(-pair_y > positive_thres),
+				len(pair_y))
+			print("pairs min/max:", np.min(pairs), np.max(pairs))
+			print("pair_y min/max:", np.min(pair_y), np.max(pair_y))
+   
+			scaler = StandardScaler().fit(pair_y.reshape(-1, 1))
+			pair_y = scaler.transform(pair_y.reshape(-1, 1)).reshape(-1)
+			positive_thres = float(
+				scaler.transform(np.array([positive_thres]).reshape(-1, 1))[0]
+			)
+			print("After scaling:")
+			print("pair_y min/max:", np.min(pair_y), np.max(pair_y))
+			print("positive_thres (scaled):", positive_thres)
+			
 		else:
 			pass
 	elif 'train' in args.mode:
@@ -719,7 +757,7 @@ if __name__ == '__main__':
 
 		if args.predict == 0:
 			print("Predicting on split 0")
-			re_evaluate(tuples, dango_list)
+			re_evaluate(tuples, dango_list, y)
 		elif args.predict == 1:
 			print("Predicting on split 1")
 			within_seen_genes(tuples, dango_list)
