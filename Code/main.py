@@ -138,39 +138,53 @@ def baseline(train_data, train_y, test_data, test_y, identifier="", random_shuff
     
 
 def evaluate_digenic(dango_list, data_dir="../data", positive_thres=0.05, batch_size=4800):
+    
+    save_dir = f"../Temp/{args.modelfolder}"
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Load pairs and ground truth
     pairs = np.load(f"{data_dir}/pairs.npy").astype("int")
     pair_y = np.load(f"{data_dir}/pair_y.npy").astype("float32")
-    pair_sign = np.load(f"{data_dir}/pair_sign.npy").astype("float32")
 
+    # Negate labels to match trigenic convention
     pair_y = -pair_y
 
-    print("Raw stats:")
-    print("  num y above threshold:", 
-          np.sum(np.abs(pair_y) > positive_thres),
-          np.sum(pair_y > positive_thres),
-          np.sum(-pair_y > positive_thres),
-          len(pair_y))
-    print("  pairs min/max:", np.min(pairs), np.max(pairs))
-    print("  pair_y min/max:", np.min(pair_y), np.max(pair_y))
+    print(f"number of digenic pairs {pairs.shape}")
 
-    scaler = StandardScaler().fit(pair_y.reshape(-1, 1))
-    y_scaled = scaler.transform(pair_y.reshape(-1, 1)).reshape(-1)
-    pos_thres_scaled = float(scaler.transform(np.array([[positive_thres]])).ravel()[0])
+    # Predict with ensemble
+    ensemble = 0
+    for hypersagnn in dango_list:
+        preds = hypersagnn.predict(
+            torch.as_tensor(pairs, dtype=torch.long, device=device),
+            verbose=True,
+            batch_size=batch_size,
+        )
+        ensemble += preds.detach().cpu().numpy()
+
+    ensemble /= len(dango_list)
+    pred_y = -ensemble.reshape(-1)  # negate preds too
+
+    # === Apply the SAME scaler as trigenic (global variable) ===
+    y_scaled = scalar.transform(pair_y.reshape(-1, 1)).reshape(-1)
+    pred_y_scaled = scalar.transform(pred_y.reshape(-1, 1)).reshape(-1)
+    pos_thres_scaled = float(
+        scalar.transform(np.array([[positive_thres]])).ravel()[0]
+    )
 
     print("After scaling:")
     print("  pair_y min/max:", np.min(y_scaled), np.max(y_scaled))
+    print("  pred_y min/max:", np.min(pred_y_scaled), np.max(pred_y_scaled))
     print("  positive_thres (scaled):", pos_thres_scaled)
 
-    ensemble = 0
-    for hypersagnn in dango_list:
-        pred = hypersagnn.predict(pairs, verbose=True, batch_size=batch_size)
-        ensemble += pred.detach().cpu().numpy()
+    # Save both raw and scaled outputs
+    np.save(f"{save_dir}/digenic_pairs.npy", pairs)
+    np.save(f"{save_dir}/digenic_y_true.npy", pair_y)          # raw negated
+    np.save(f"{save_dir}/digenic_pred_y.npy", pred_y)          # raw negated
+    np.save(f"{save_dir}/digenic_y_true_scaled.npy", y_scaled) # scaled
+    np.save(f"{save_dir}/digenic_pred_y_scaled.npy", pred_y_scaled)
+    np.save(f"{save_dir}/digenic_pos_thres_scaled.npy", pos_thres_scaled)
 
-    ensemble /= len(dango_list)
-
-    pred_y = scaler.inverse_transform(ensemble.reshape(-1, 1)).reshape(-1)
-
-    return pred_y, pair_y, pairs
+    return pred_y_scaled, y_scaled, pairs, pos_thres_scaled
 
 
 # call subprocess for training a Dango instance (used in multiprocessing)
@@ -472,7 +486,7 @@ def create_dango_list(ckpt_list , get_node_embedding=False):
     
     dango_list = []
     metaembedding_list = []
-    
+    print(len(ckpt_list))
     for checkpoint in ckpt_list:
         graphsage_embedding, recon_nn, node_embedding, hypersagnn, ppi_nn = get_model(gene_num, embed_dim, auxi_m, auxi_adj)
         hypersagnn.load_state_dict(checkpoint['model_link'])
@@ -515,25 +529,34 @@ def get_embeddings(dango_list, chunks, batch_size=4800):# add permutation of emb
     ensemble_embeddings /= len(dango_list)
     return ensemble_embeddings
 
-def get_metaembedding_weights(tuples, metaembedding_list, batch_size=4800, device="cuda", datetime_object=None):
+def get_metaembedding_weights(tuples, dango_list, batch_size=9600, device="cuda", datetime_object=None):
+    save_path = f"../Temp/{datetime_object}/re_eval_metaembedding_weights.npy"
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
     all_weights = []
-    print("getting metaembedding weights")
-    for memb in metaembedding_list:
+    print(f"Getting metaembedding weights for {len(dango_list)} models")
+    print("Tuples shape:", tuples.shape)
+
+    for i, model in enumerate(dango_list):
+        memb = model.node_embedding  
         memb.eval()
+
+        batch_weights = []
         with torch.no_grad():
-            batch_weights = []
             for j in range(math.ceil(len(tuples) / batch_size)):
-                x = tuples[j * batch_size : min((j + 1) * batch_size, len(tuples))]
+                x = tuples[j * batch_size : (j + 1) * batch_size]
                 x = torch.as_tensor(x, dtype=torch.long, device=device)
 
-                _, weights = memb.on_hook_forward(x, return_weights=True)  # (batch, 3, n_embed)
+                _, weights = memb.on_hook_forward(x, return_weights=True)  # (batch, k, n_embed)
                 batch_weights.append(weights.cpu().numpy())
 
-            all_weights.append(np.concatenate(batch_weights, axis=0))  # (N, 3, n_embed)
+        weights = np.concatenate(batch_weights, axis=0)  # (N, k, n_embed)
+        all_weights.append(weights)
+        print(f"Model {i}: collected weights {weights.shape}")
 
-    all_weights = np.stack(all_weights, axis=0)
-    
-    np.save(f"../Temp/{datetime_object}/re_eval_metaembedding_weights.npy", all_weights)
+    all_weights = np.stack(all_weights, axis=0)  # (n_models, N, k, n_embed)
+    np.save(save_path, all_weights)
+    print(f"Saved weights to {save_path}")
 
     return all_weights
 
@@ -764,7 +787,7 @@ if __name__ == '__main__':
         elif args.split == 2:
             print("Evaluating on split 2")
             gene_split_nn_experiments(10, 400, True, withPPI=withprotein)
-        elif args.predict == 3:
+        elif args.split == 3:
             print("Evaluating digenic interactions")
    
             if args.modelfolder is not None and os.path.exists("../Temp/%s" % args.modelfolder):	#using pretrained model
@@ -774,10 +797,8 @@ if __name__ == '__main__':
     
             dango_list= create_dango_list(ckpt_list)
             
-            pred_y, y_true, pairs = evaluate_digenic(dango_list, data_dir="../data", positive_thres=0.05)
-            np.save("digenic_pred_y.npy", pred_y)
-            np.save("digenic_y_true.npy", y_true)
-            np.save("digenic_pairs.npy", pairs)
+            evaluate_digenic(dango_list, data_dir="../data", positive_thres=0.05)
+
             
         else:
             pass
@@ -802,11 +823,12 @@ if __name__ == '__main__':
             print(f"loading checkpoint from {ckpt_path}")
         else:
             ckpt_list = list(torch.load("../Temp/%s/Experiment_model_list" % datetime_object, map_location='cpu'))
-        dango_list,metaembedding_list = create_dango_list(ckpt_list, get_node_embedding=True)
+        dango_list = create_dango_list(ckpt_list)
   
         if 'memb' in args.mode:
             print("in")
-            get_metaembedding_weights(tuples, metaembedding_list)
+            weights = get_metaembedding_weights(tuples, dango_list, datetime_object="dango")
+
             
         
         if args.predict == 0:
