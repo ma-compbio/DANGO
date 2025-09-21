@@ -136,9 +136,15 @@ def baseline(train_data, train_y, test_data, test_y, identifier="", random_shuff
         "rf_auprc": auc_rf[1],
     }
     
-
 def evaluate_digenic(dango_list, data_dir="../data", positive_thres=0.05, batch_size=4800):
-    
+    """
+    Match the trigenic pipeline:
+    - negate labels
+    - scale labels with global scalar
+    - keep raw predictions
+    - also save inverse_transform(preds) for consistency with trigenic
+    """
+
     save_dir = f"../Temp/{args.modelfolder}"
     os.makedirs(save_dir, exist_ok=True)
 
@@ -146,10 +152,8 @@ def evaluate_digenic(dango_list, data_dir="../data", positive_thres=0.05, batch_
     pairs = np.load(f"{data_dir}/pairs.npy").astype("int")
     pair_y = np.load(f"{data_dir}/pair_y.npy").astype("float32")
 
-    # Negate labels to match trigenic convention
+    # Negate labels
     pair_y = -pair_y
-
-    print(f"number of digenic pairs {pairs.shape}")
 
     # Predict with ensemble
     ensemble = 0
@@ -162,29 +166,35 @@ def evaluate_digenic(dango_list, data_dir="../data", positive_thres=0.05, batch_
         ensemble += preds.detach().cpu().numpy()
 
     ensemble /= len(dango_list)
-    pred_y = -ensemble.reshape(-1)  # negate preds too
+    pred_y = -ensemble.reshape(-1)  # raw preds (not scaled)
 
-    # === Apply the SAME scaler as trigenic (global variable) ===
+    # === Scale labels only ===
     y_scaled = scalar.transform(pair_y.reshape(-1, 1)).reshape(-1)
-    pred_y_scaled = scalar.transform(pred_y.reshape(-1, 1)).reshape(-1)
     pos_thres_scaled = float(
         scalar.transform(np.array([[positive_thres]])).ravel()[0]
     )
 
-    print("After scaling:")
-    print("  pair_y min/max:", np.min(y_scaled), np.max(y_scaled))
-    print("  pred_y min/max:", np.min(pred_y_scaled), np.max(pred_y_scaled))
-    print("  positive_thres (scaled):", pos_thres_scaled)
+    # === Inverse transform on raw predictions (to mimic trigenic code) ===
+    pred_y_inverse = scalar.inverse_transform(pred_y.reshape(-1, 1)).reshape(-1)
+    y_inverse = scalar.inverse_transform(y_scaled.reshape(-1, 1)).reshape(-1)
 
-    # Save both raw and scaled outputs
+    # Save outputs
     np.save(f"{save_dir}/digenic_pairs.npy", pairs)
-    np.save(f"{save_dir}/digenic_y_true.npy", pair_y)          # raw negated
-    np.save(f"{save_dir}/digenic_pred_y.npy", pred_y)          # raw negated
-    np.save(f"{save_dir}/digenic_y_true_scaled.npy", y_scaled) # scaled
-    np.save(f"{save_dir}/digenic_pred_y_scaled.npy", pred_y_scaled)
+
+    # Raw
+    np.save(f"{save_dir}/digenic_y_true.npy", pair_y)
+    np.save(f"{save_dir}/digenic_pred_y.npy", pred_y)
+
+    # Scaled labels
+    np.save(f"{save_dir}/digenic_y_true_scaled.npy", y_scaled)
     np.save(f"{save_dir}/digenic_pos_thres_scaled.npy", pos_thres_scaled)
 
-    return pred_y_scaled, y_scaled, pairs, pos_thres_scaled
+    # Inverse (preds + labels)
+    np.save(f"{save_dir}/digenic_pred_y_inverse.npy", pred_y_inverse)
+    np.save(f"{save_dir}/digenic_y_true_inverse.npy", y_inverse)
+
+    return pred_y, y_scaled, pairs, pos_thres_scaled
+
 
 
 # call subprocess for training a Dango instance (used in multiprocessing)
