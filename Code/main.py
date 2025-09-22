@@ -84,7 +84,8 @@ def baseline(train_data, train_y, test_data, test_y, identifier="", random_shuff
         print(s, file=result_file)
 
     log(f"start baseline with aggregation type {agg}")
-    baseline_vec = np.load("../data/embeddings.npy")
+    # baseline_vec = np.load("../data/embeddings.npy")              # use mashup embeddings
+    baseline_vec = np.load("../data/bertwalk_embeddings.npy")       # use bertwalk embeddings
     if random_shuffle:
         np.random.shuffle(baseline_vec)
 
@@ -421,32 +422,32 @@ def gene_split_nn_experiments(rounds=10, n_genes=40, strict=False, withPPI=False
                 pass
 
 
-    ensemble /= rounds
-    torch.save(checkpoint_list, "../Temp/%s/Experiment_model_list" % (datetime_object))
-    print("ensemble")
-    pos_mask = test_y >= positive_thres
-    corr1, corr2 = correlation_cuda(test_y, ensemble)
-    pos_mask = test_y >= positive_thres
-    corr1_pos, corr2_pos = correlation_cuda(test_y[pos_mask], ensemble[pos_mask])
-    roc, aupr = roc_auc_cuda(pos_mask, ensemble, balance=True)
-    print ("Pearson, Spearman")
-    print (corr1, corr2)
-    print("Pearson_strong, Spearman_strong")
-    print (corr1_pos, corr2_pos)
-    print ("AUC, AUPR")
-    print (roc, aupr)
-    sys.stdout.flush()
-    metrics = [corr1, corr2, corr1_pos, corr2_pos, roc, aupr]
-    print(metrics)
-    split = 1 if not strict else 2
-    with open(f"../Temp/{datetime_object}/result_split{split}.txt", "a") as result_file:
-        result_file.write("gene split\n")
-        for score in metrics:
-            result_file.write("%f\n" %(score))
-            result_file.flush()
-    # result_file.close()
-    sys.stdout.flush()
-    return metrics
+        ensemble /= rounds
+        torch.save(checkpoint_list, "../Temp/%s/Experiment_model_list" % (datetime_object))
+        print("ensemble")
+        pos_mask = test_y >= positive_thres
+        corr1, corr2 = correlation_cuda(test_y, ensemble)
+        pos_mask = test_y >= positive_thres
+        corr1_pos, corr2_pos = correlation_cuda(test_y[pos_mask], ensemble[pos_mask])
+        roc, aupr = roc_auc_cuda(pos_mask, ensemble, balance=True)
+        print ("Pearson, Spearman")
+        print (corr1, corr2)
+        print("Pearson_strong, Spearman_strong")
+        print (corr1_pos, corr2_pos)
+        print ("AUC, AUPR")
+        print (roc, aupr)
+        sys.stdout.flush()
+        metrics = [corr1, corr2, corr1_pos, corr2_pos, roc, aupr]
+        print(metrics)
+        split = 1 if not strict else 2
+        with open(f"../Temp/{datetime_object}/result_split{split}.txt", "a") as result_file:
+            result_file.write("gene split\n")
+            for score in metrics:
+                result_file.write("%f\n" %(score))
+                result_file.flush()
+        # result_file.close()
+        sys.stdout.flush()
+        return metrics
 
 
 def whole_dataset_train(rounds=10, withPPI=False):
