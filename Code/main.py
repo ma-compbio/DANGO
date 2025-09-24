@@ -150,11 +150,11 @@ def evaluate_digenic(dango_list, data_dir="../data", positive_thres=0.05, batch_
     os.makedirs(save_dir, exist_ok=True)
 
     # Load pairs and ground truth
-    pairs = np.load(f"{data_dir}/pairs.npy").astype("int")
-    pair_y = np.load(f"{data_dir}/pair_y.npy").astype("float32")
+    pairs = np.load(f"{data_dir}/digenic_tuples.npy").astype("int")
+    # pair_y = np.load(f"{data_dir}/digenic_y.npy").astype("float32")
 
     # Negate labels
-    pair_y = -pair_y
+    # pair_y = -pair_y
 
     # Predict with ensemble
     ensemble = 0
@@ -167,34 +167,34 @@ def evaluate_digenic(dango_list, data_dir="../data", positive_thres=0.05, batch_
         ensemble += preds.detach().cpu().numpy()
 
     ensemble /= len(dango_list)
-    pred_y = -ensemble.reshape(-1)  # raw preds (not scaled)
+    # pred_y = -ensemble.reshape(-1)  # raw preds (not scaled)
 
-    # === Scale labels only ===
-    y_scaled = scalar.transform(pair_y.reshape(-1, 1)).reshape(-1)
-    pos_thres_scaled = float(
-        scalar.transform(np.array([[positive_thres]])).ravel()[0]
-    )
+    # # === Scale labels only ===
+    # y_scaled = scalar.transform(pair_y.reshape(-1, 1)).reshape(-1)
+    # pos_thres_scaled = float(
+    #     scalar.transform(np.array([[positive_thres]])).ravel()[0]
+    # )
 
-    # === Inverse transform on raw predictions (to mimic trigenic code) ===
-    pred_y_inverse = scalar.inverse_transform(pred_y.reshape(-1, 1)).reshape(-1)
-    y_inverse = scalar.inverse_transform(y_scaled.reshape(-1, 1)).reshape(-1)
+    # # === Inverse transform on raw predictions (to mimic trigenic code) ===
+    # pred_y_inverse = scalar.inverse_transform(pred_y.reshape(-1, 1)).reshape(-1)
+    # y_inverse = scalar.inverse_transform(y_scaled.reshape(-1, 1)).reshape(-1)
 
     # Save outputs
-    np.save(f"{save_dir}/digenic_pairs.npy", pairs)
+    # np.save(f"{save_dir}/digenic_pairs.npy", pairs)
 
     # Raw
-    np.save(f"{save_dir}/digenic_y_true.npy", pair_y)
+    # np.save(f"{save_dir}/digenic_y_true.npy", pair_y)
     np.save(f"{save_dir}/digenic_pred_y.npy", pred_y)
 
-    # Scaled labels
-    np.save(f"{save_dir}/digenic_y_true_scaled.npy", y_scaled)
-    np.save(f"{save_dir}/digenic_pos_thres_scaled.npy", pos_thres_scaled)
+    # # Scaled labels
+    # np.save(f"{save_dir}/digenic_y_true_scaled.npy", y_scaled)
+    # np.save(f"{save_dir}/digenic_pos_thres_scaled.npy", pos_thres_scaled)
 
-    # Inverse (preds + labels)
-    np.save(f"{save_dir}/digenic_pred_y_inverse.npy", pred_y_inverse)
-    np.save(f"{save_dir}/digenic_y_true_inverse.npy", y_inverse)
+    # # Inverse (preds + labels)
+    # np.save(f"{save_dir}/digenic_pred_y_inverse.npy", pred_y_inverse)
+    # np.save(f"{save_dir}/digenic_y_true_inverse.npy", y_inverse)
 
-    return pred_y, y_scaled, pairs, pos_thres_scaled
+    # return pred_y, y_scaled, pairs, pos_thres_scaled
 
 
 
