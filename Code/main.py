@@ -92,7 +92,6 @@ def baseline(train_data, train_y, test_data, test_y, identifier="", random_shuff
     baseline_feature_train = id2baselinevecs(baseline_vec, train_data, type=agg)
     baseline_feature_test = id2baselinevecs(baseline_vec, test_data, type=agg)
 
-    # ---------- XGBoost ----------
     xgb = XGBRegressor(n_jobs=cpu_num, n_estimators=500, max_depth=10).fit(baseline_feature_train, train_y)
     y_pred_xgb = xgb.predict(baseline_feature_test)
 
@@ -107,7 +106,6 @@ def baseline(train_data, train_y, test_data, test_y, identifier="", random_shuff
     log(f"roc_auc: {auc_xgb}")
     
 
-    # ---------- Random Forest ----------
     rf = RandomForestRegressor(n_jobs=cpu_num, n_estimators=500, max_depth=10).fit(baseline_feature_train, train_y)
     y_pred_rf = rf.predict(baseline_feature_test)
 
@@ -137,70 +135,193 @@ def baseline(train_data, train_y, test_data, test_y, identifier="", random_shuff
         "rf_auprc": auc_rf[1],
     }
     
-def evaluate_digenic(dango_list, data_dir="../data", positive_thres=0.05, batch_size=4800):
-    """
-    Match the trigenic pipeline:
-    - negate labels
-    - scale labels with global scalar
-    - keep raw predictions
-    - also save inverse_transform(preds) for consistency with trigenic
-    """
+    
+def eval_digenic_once(withPPI=False, debug=False):
+    print("=== Single-run training on Digenic dataset ===")
+    data_dir = "../data"
 
-    save_dir = f"../Temp/{args.modelfolder}"
-    os.makedirs(save_dir, exist_ok=True)
+    pairs = np.load(f"{data_dir}/pairs.npy").astype(int)
+    y = -np.load(f"{data_dir}/pair_y.npy").astype("float32")
 
-    # Load pairs and ground truth
-    pairs = np.load(f"{data_dir}/digenic_tuples.npy").astype("int")
-    # pair_y = np.load(f"{data_dir}/digenic_y.npy").astype("float32")
+    # mask = y > 0.05
+    # pairs, y = pairs[mask], y[mask]
+    # print(f"Filtered to {len(y)} pairs with ε > 0.05")
 
-    # Negate labels
-    # pair_y = -pair_y
+    idx = np.arange(len(y))
+    np.random.shuffle(idx)
+    train_split = int(0.8 * len(y))
+    valid_split = int(0.9 * len(y))
 
-    # Predict with ensemble
-    ensemble = 0
-    for hypersagnn in dango_list:
-        preds = hypersagnn.predict(
-            torch.as_tensor(pairs, dtype=torch.long, device=device),
-            verbose=True,
-            batch_size=batch_size,
-        )
-        ensemble += preds.detach().cpu().numpy()
+    train_index = idx[:train_split]
+    valid_index = idx[train_split:valid_split]
+    test_index = idx[valid_split:]
 
-    ensemble /= len(dango_list)
-    # pred_y = -ensemble.reshape(-1)  # raw preds (not scaled)
+    print(f"Train/Valid/Test sizes: {len(train_index)}, {len(valid_index)}, {len(test_index)}")
 
-    # # === Scale labels only ===
-    # y_scaled = scalar.transform(pair_y.reshape(-1, 1)).reshape(-1)
-    # pos_thres_scaled = float(
-    #     scalar.transform(np.array([[positive_thres]])).ravel()[0]
-    # )
+    datetime_str = time.strftime("%b%d_%H-%M-%S")
+    save_root = f"../Temp/{datetime_str}"
+    os.makedirs(save_root, exist_ok=True)
+    split_loc = f"{save_root}/single_run_split.npy"
+    np.save(split_loc, np.array([train_index, valid_index, test_index], dtype=object))
 
-    # # === Inverse transform on raw predictions (to mimic trigenic code) ===
-    # pred_y_inverse = scalar.inverse_transform(pred_y.reshape(-1, 1)).reshape(-1)
-    # y_inverse = scalar.inverse_transform(y_scaled.reshape(-1, 1)).reshape(-1)
+    print("Launching DANGO training...")
+    if debug:
+        mp_train(positive_thres_origin, gene_num, split_loc, datetime_str, "single", withPPI, "digenic")
+    else:
+        mp_train(positive_thres_origin, gene_num, split_loc, datetime_str, "single", withPPI, "digenic")
 
-    # Save outputs
-    # np.save(f"{save_dir}/digenic_pairs.npy", pairs)
+    print("\n=== Evaluating single run ===")
+    ensemble = np.load(f"{save_root}/ensemble_single.npy")
+    test_y = y[test_index]
 
-    # Raw
-    # np.save(f"{save_dir}/digenic_y_true.npy", pair_y)
-    np.save(f"{save_dir}/digenic_pred_y.npy", pred_y)
+    corr1, corr2 = correlation_cuda(test_y, ensemble)
+    pos_mask = test_y >= positive_thres
+    corr1_pos, corr2_pos = correlation_cuda(test_y[pos_mask], ensemble[pos_mask])
+    roc, aupr = roc_auc_cuda(pos_mask, ensemble, balance=True)
 
-    # # Scaled labels
-    # np.save(f"{save_dir}/digenic_y_true_scaled.npy", y_scaled)
-    # np.save(f"{save_dir}/digenic_pos_thres_scaled.npy", pos_thres_scaled)
+    print(f"Pearson: {corr1:.3f}, Spearman: {corr2:.3f}")
+    print(f"Pearson_pos: {corr1_pos:.3f}, Spearman_pos: {corr2_pos:.3f}")
+    print(f"AUROC: {roc:.3f}, AUPRC: {aupr:.3f}")
 
-    # # Inverse (preds + labels)
-    # np.save(f"{save_dir}/digenic_pred_y_inverse.npy", pred_y_inverse)
-    # np.save(f"{save_dir}/digenic_y_true_inverse.npy", y_inverse)
+    with open(f"{save_root}/single_run_results.txt", "w") as f:
+        f.write(f"Pearson: {corr1}\nSpearman: {corr2}\n")
+        f.write(f"Pearson_pos: {corr1_pos}\nSpearman_pos: {corr2_pos}\n")
+        f.write(f"AUROC: {roc}\nAUPRC: {aupr}\n")
 
-    # return pred_y, y_scaled, pairs, pos_thres_scaled
+    print(f"Saved results to {save_root}/single_run_results.txt")
+
+
+
+def eval_digenic(n_fold=5, rounds=5, withPPI=False, debug=False, run_baseline=False):
+    print(f"Running {n_fold}-fold CV on Digenic dataset ({rounds} rounds per fold)")
+    data_dir = "../data"
+
+    pairs = np.load(f"{data_dir}/pairs.npy").astype(int)
+    y = np.load(f"{data_dir}/pair_y.npy").astype("float32")
+    
+    print(f"Loaded {len(pairs)} digenic interactions")
+
+    # y= -y
+    # mask = y > 0.05
+    # pairs = pairs[mask]
+    # y = y[mask]
+    # print(f"Filtered to {len(y)} pairs with |ε| > 0.05 before CV")
+    
+    scaler = StandardScaler()
+    y = scaler.fit_transform(y.reshape(-1, 1)).reshape(-1)
+
+    save_root = f"../Temp/{datetime_object}"
+    os.makedirs(save_root, exist_ok=True)
+    f = h5py.File(os.path.join(save_root, "Experiment.hdf5"), "w")
+    result_file = open(os.path.join(save_root, "result.txt"), "a")
+
+    kf = KFold(n_splits=n_fold, shuffle=True)
+    cv_count = 0
+    checkpoint_list_all = []
+
+    for train_valid_index, test_index in kf.split(pairs):
+        print(f"\n=== Fold {cv_count} ===")
+
+        pool = ProcessPoolExecutor(max_workers=args.thread)
+        p_list, checkpoint_list, save_string_list = [], [], []
+        grp = f.create_group(f"Cross_valid_{cv_count}")
+
+        ensemble = 0
+        test_y = y[test_index]
+
+        for i in range(rounds):
+            index = torch.randperm(len(train_valid_index))
+            train_index = train_valid_index[index[:int(0.8 * len(index))]]
+            valid_index = train_valid_index[index[int(0.8 * len(index)):]]
+
+            indexs = np.array([train_index, valid_index, test_index], dtype=object)
+            split_loc = f"{save_root}/Experiment_{cv_count}_{i}_ind.npy"
+            np.save(split_loc, indexs)
+            save_string = f"{cv_count}_{i}"
+            save_string_list.append(save_string)
+
+            if debug:
+                mp_train(positive_thres_origin, gene_num, split_loc, datetime_object, save_string)
+            else:
+                p_list.append(pool.submit(
+                    mp_train, positive_thres_origin, gene_num, split_loc,
+                    datetime_object, save_string, withPPI, "digenic"
+                ))
+                time.sleep(30)
+        pool.shutdown(wait=True)
+
+        finish_count = 0
+        for save_string in save_string_list:
+            # try:
+            ckpt_list = list(torch.load(f"{save_root}/{save_string}_model_list", map_location="cpu"))
+            ensemble_part = np.load(f"{save_root}/ensemble_{save_string}.npy")
+            finish_count += 1
+            checkpoint_list += ckpt_list
+            ensemble += ensemble_part
+            # except:
+            #     print(f"some instances failed in fold {cv_count}, {save_string}")
+
+        if finish_count == 0:
+            finish_count = 1
+        ensemble /= finish_count
+
+        print(f"Ensemble evaluation for Fold {cv_count}")
+        corr1, corr2 = correlation_cuda(test_y, ensemble)
+        pos_mask = test_y >= positive_thres
+        corr1_pos, corr2_pos = correlation_cuda(test_y[pos_mask], ensemble[pos_mask])
+        roc, aupr = roc_auc_cuda(pos_mask, ensemble, balance=True)
+        
+        log_path = os.path.join(save_root, "progress_log.csv")
+
+        row = {
+            "fold": cv_count,
+            "rounds_finished": finish_count,
+            "pearson": float(corr1),
+            "spearman": float(corr2),
+            "pearson_pos": float(corr1_pos),
+            "spearman_pos": float(corr2_pos),
+            "auroc": float(roc),
+            "auprc": float(aupr),
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        if not os.path.exists(log_path):
+            pd.DataFrame([row]).to_csv(log_path, index=False)
+        else:
+            pd.DataFrame([row]).to_csv(log_path, mode="a", header=False, index=False)
+
+        print(f"Logged fold {cv_count} results to {log_path}")
+
+        metrics = [corr1, corr2, corr1_pos, corr2_pos, roc, aupr]
+        result_file.write(f"Fold {cv_count}\n")
+        for score in metrics:
+            result_file.write(f"{score:.6f}\n")
+        result_file.flush()
+
+        new_checkpoint_dict = {f"model_link_{i}": c["model_link"] for i, c in enumerate(checkpoint_list)}
+        torch.save(new_checkpoint_dict, f"{save_root}/Experiment_model_CV_{cv_count}")
+        checkpoint_list_all += checkpoint_list
+
+        try:
+            temp = ensemble.cpu().numpy()
+            test_y = test_y.cpu().numpy()
+        except:
+            temp = ensemble
+        grp.create_dataset("predicted", data=temp)
+        grp.create_dataset("ensemble_inverse", data=scalar.inverse_transform(temp.reshape(-1, 1)).reshape(-1))
+        grp.create_dataset("test_y_inverse", data=scalar.inverse_transform(test_y.reshape(-1, 1)).reshape(-1))
+
+        cv_count += 1
+
+    torch.save(checkpoint_list_all, f"{save_root}/Experiment_model_list")
+    result_file.close()
+    f.close()
+    print("Digenic CV training complete.")
 
 
 
 # call subprocess for training a Dango instance (used in multiprocessing)
-def mp_train(positive_thres, gene_num, split_loc, save_dir, save_string, withPPI):
-    cmd = ["python", "train.py", str(positive_thres), str(gene_num), str(embed_dim), split_loc, save_dir, save_string, str(withPPI)]
+def mp_train(positive_thres, gene_num, split_loc, save_dir, save_string, withPPI, type="trigenic"):
+    cmd = ["python", "train.py", str(positive_thres), str(gene_num), str(embed_dim), split_loc, save_dir, save_string, str(withPPI), type]
     subprocess.call(cmd)
     print("start reading")
 
@@ -800,15 +921,19 @@ if __name__ == '__main__':
             gene_split_nn_experiments(10, 400, True, withPPI=withprotein)
         elif args.split == 3:
             print("Evaluating digenic interactions")
-   
-            if args.modelfolder is not None and os.path.exists("../Temp/%s" % args.modelfolder):	#using pretrained model
-                ckpt_list = list(torch.load("../Temp/%s/Experiment_model_list" % args.modelfolder, map_location='cpu'))
-            else:
-                ckpt_list = list(torch.load("../Temp/%s/Experiment_model_list" % datetime_object, map_location='cpu'))
-    
-            dango_list= create_dango_list(ckpt_list)
             
-            evaluate_digenic(dango_list, data_dir="../data", positive_thres=0.05)
+            eval_digenic(n_fold=5,rounds=1)
+        elif args.split == 99:  # debug single-run
+            eval_digenic_once(withPPI=False, debug=False)
+   
+            # if args.modelfolder is not None and os.path.exists("../Temp/%s" % args.modelfolder):	#using pretrained model
+            #     ckpt_list = list(torch.load("../Temp/%s/Experiment_model_list" % args.modelfolder, map_location='cpu'))
+            # else:
+            #     ckpt_list = list(torch.load("../Temp/%s/Experiment_model_list" % datetime_object, map_location='cpu'))
+    
+            # dango_list= create_dango_list(ckpt_list)
+            
+            # evaluate_digenic(dango_list, data_dir="../data", positive_thres=0.05)
 
             
         else:
@@ -825,6 +950,33 @@ if __name__ == '__main__':
         elif args.split == 2:
             print("Evaluating on split 2")
             gene_split_nn_experiments(10, 400, True, withPPI=withprotein,  run_baseline=True)
+        elif args.split == 3:
+            print("Evaluating digenic")
+            pairs = np.load("../data/pairs.npy").astype(int)
+            y = -np.load("../data/pair_y.npy").astype("float32")
+
+            mask = y > 0.05
+            pairs = pairs[mask]
+            y = y[mask]
+            print(f"Filtered to {len(y)} pairs with |ε| > 0.05")
+            scaler = StandardScaler()
+            y = scaler.fit_transform(y.reshape(-1, 1)).reshape(-1)
+            train_data, test_data, train_y, test_y = train_test_split(
+                pairs, y, test_size=0.2, random_state=42
+            )
+            results = baseline(
+                train_data=train_data,
+                train_y=train_y,
+                test_data=test_data,
+                test_y=test_y,
+                identifier="digenic",
+                random_shuffle=False,
+                agg="cat"  # or "avg"
+            )
+
+            print("Digenic Baseline results:")
+            for k, v in results.items():
+                print(f"{k}: {v:.3f}")
    
     elif 'predict' in args.mode:
 

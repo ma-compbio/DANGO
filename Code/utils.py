@@ -88,28 +88,40 @@ def pass_(x):
     return x
 
 
-def roc_auc_cuda(y_true, y_pred, balance=False):
-    try:
-        y_true = y_true.cpu().detach().numpy().reshape((-1, 1))
-        y_pred = y_pred.cpu().detach().numpy().reshape((-1, 1))
-    except:
-        y_true = y_true.reshape((-1, 1))
-        y_pred = y_pred.reshape((-1, 1))
+# def roc_auc_cuda(y_true, y_pred, balance=False):
+#     try:
+#         y_true = y_true.cpu().detach().numpy().reshape((-1, 1))
+#         y_pred = y_pred.cpu().detach().numpy().reshape((-1, 1))
+#     except:
+#         y_true = y_true.reshape((-1, 1))
+#         y_pred = y_pred.reshape((-1, 1))
 
-    if balance:
-        pos = np.where(y_true == 1.0)[0]
-        neg = np.where(y_true == 0.0)[0]
-        num = int(min(len(pos), len(neg)))
-        if num == 0:
-            print(y_true)
-        pos = np.random.permutation(pos)[:num]
-        neg = np.random.permutation(neg)[:num]
-        index = np.concatenate([pos, neg])
-        y_true, y_pred = y_true[index], y_pred[index]
+#     if balance:
+#         pos = np.where(y_true == 1.0)[0]
+#         neg = np.where(y_true == 0.0)[0]
+#         num = int(min(len(pos), len(neg)))
+#         if num == 0:
+#             print(y_true)
+#         pos = np.random.permutation(pos)[:num]
+#         neg = np.random.permutation(neg)[:num]
+#         index = np.concatenate([pos, neg])
+#         y_true, y_pred = y_true[index], y_pred[index]
 
-    score1, score2 = roc_auc_score(
-        y_true, y_pred), average_precision_score(
-        y_true, y_pred)
+#     score1, score2 = roc_auc_score(
+#         y_true, y_pred), average_precision_score(
+#         y_true, y_pred)
+#     return score1, score2
+
+def roc_auc_cuda(y_true, y_pred, balance=True):
+    y_true = y_true.cpu().detach().numpy().flatten() if torch.is_tensor(y_true) else y_true.flatten()
+    y_pred = y_pred.cpu().detach().numpy().flatten() if torch.is_tensor(y_pred) else y_pred.flatten()
+
+    if np.sum(y_true) == 0 or np.sum(1 - y_true) == 0:
+        # no positives or all positives
+        return 0.5, 0.5  # neutral AUC/AUPRC
+
+    score1 = roc_auc_score(y_true, y_pred)
+    score2 = average_precision_score(y_true, y_pred)
     return score1, score2
 
 

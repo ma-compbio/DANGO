@@ -451,22 +451,48 @@ if __name__ == '__main__':
 
         main_task_loss_func = [log_cosh]
         reconstruct_loss_func = sparse_mse
+        
+        mode = "trigenic"
+        if len(sys.argv) > 8:
+            mode = sys.argv[8].lower()
 
-        tuples = np.load("../data/tuples.npy").astype('int')
-        y = np.load("../data/y.npy").astype('float32')
-        significance = np.load("../data/sign.npy").astype('float32')
-        # We use the negative log10 significance score as the sample weight
-        significance = -np.log10(significance + 1e-15)
+        if mode == "digenic":
+            print("Training on Digenic dataset")
+            tuples = np.load("../data/pairs.npy").astype(int)
+            y = np.load("../data/pair_y.npy").astype("float32")
+            significance = np.ones_like(y)
 
-        # We take the negative of y, because all of the y are negative,
-        # by doing so, we could directly use the prediction from regression to calculate aupr without multiplies it with -1
-        y = -y
-        print("num y that pases thres", np.sum(np.abs(y) > positive_thres), np.sum(y > positive_thres),
-              np.sum(-y > positive_thres), len(y))
-        print("tuples, min, max", tuples, np.min(tuples), np.max(tuples))
-        print("min, max of y", np.min(y), np.max(y))
-        scalar = StandardScaler().fit(y.reshape((-1, 1)))
-        y = scalar.transform(y.reshape((-1, 1))).reshape((-1))
+            y = -y
+            # mask = y > 0.05
+            # tuples = tuples[mask]
+            # y = y[mask]
+            # print(f"Filtered to {len(y)} pairs with ε > 0.05 before training")
+        else:
+            print("Training on Trigenic dataset")
+            tuples = np.load("../data/tuples.npy").astype(int)
+            y = np.load("../data/y.npy").astype("float32")
+            significance = np.load("../data/sign.npy").astype("float32")
+            y = -y
+
+        # --- Standardize target values (applies to both modes) ---
+        scalar = StandardScaler().fit(y.reshape(-1, 1))
+        y = scalar.transform(y.reshape(-1, 1)).reshape(-1)
+
+        # tuples = np.load("../data/tuples.npy").astype('int')
+        # y = np.load("../data/y.npy").astype('float32')
+        # significance = np.load("../data/sign.npy").astype('float32')
+        # # We use the negative log10 significance score as the sample weight
+        # significance = -np.log10(significance + 1e-15)
+
+        # # We take the negative of y, because all of the y are negative,
+        # # by doing so, we could directly use the prediction from regression to calculate aupr without multiplies it with -1
+        # y = -y
+        # print("num y that pases thres", np.sum(np.abs(y) > positive_thres), np.sum(y > positive_thres),
+        #       np.sum(-y > positive_thres), len(y))
+        # print("tuples, min, max", tuples, np.min(tuples), np.max(tuples))
+        # print("min, max of y", np.min(y), np.max(y))
+        # scalar = StandardScaler().fit(y.reshape((-1, 1)))
+        # y = scalar.transform(y.reshape((-1, 1))).reshape((-1))
 
         # Get the training/valid/testing indexes
         indexs = np.load(split_loc, allow_pickle=True)
@@ -474,7 +500,10 @@ if __name__ == '__main__':
         train_index, valid_index, test_index = indexs[0], indexs[1], indexs[2]
 
         train_data = tuples[train_index]
+        print(f"train tuples",train_data)
         train_y = y[train_index]
+        print(f"train y",train_y)
+
         train_sign = significance[train_index]
         valid_data = tuples[valid_index]
         valid_y = y[valid_index]

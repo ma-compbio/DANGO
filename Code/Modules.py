@@ -91,9 +91,11 @@ class MetaEmbedding(nn.Module):
         self.forward = self.on_hook_forward
 
     def off_hook_forward(self, x):
+        # breakpoint()
         if len(x.shape) > 1:
             sz_b, len_seq = x.shape
-            x = x.view(-1)
+            # x = x.view(-1)
+            x = x.reshape(-1)
             reshape_flag = True
         else:
             reshape_flag = False
@@ -104,27 +106,48 @@ class MetaEmbedding(nn.Module):
         #
         return embed
 
-    def on_hook_forward(self, x, return_weights=False):
-        if len(x.shape) > 1:  # e.g. trigenic: (batch, 3)
+    # def on_hook_forward(self, x, return_weights=False):
+    #     if len(x.shape) > 1:  # e.g. trigenic: (batch, 3)
+    #         sz_b, len_seq = x.shape
+    #         x = x.view(-1)
+    #         reshape_flag = True
+    #     else:
+    #         reshape_flag = False
+
+    #     embed = torch.stack([embed_nn(x) for embed_nn in self.embed_list], dim=-1)  # (N_total, dim, n_embed)
+    #     embed = embed.permute(0, 2, 1)  # (N_total, n_embed, dim)
+
+    #     weight = self.attention(embed)            # (N_total, n_embed, 1)
+    #     weight = F.softmax(weight, dim=-2).squeeze(-1)  # (N_total, n_embed)
+
+    #     combined = torch.sum(embed * weight.unsqueeze(-1), dim=-2)  # (N_total, dim)
+
+    #     if reshape_flag:
+    #         combined = combined.view(sz_b, len_seq, -1)  # (batch, tuple_len, dim)
+    #         weight = weight.view(sz_b, len_seq, -1)      # (batch, tuple_len, n_embed)
+
+    #     return (combined, weight) if return_weights else combined
+    def on_hook_forward(self, x):
+        if len(x.shape) > 1:
             sz_b, len_seq = x.shape
             x = x.view(-1)
             reshape_flag = True
         else:
             reshape_flag = False
+        embeddings = [embed_nn(x) for embed_nn in self.embed_list]
+        embed = torch.stack(embeddings, dim=-1)
+        # shape of (sz_b * len_seq, n_embed, dim)
+        embed = embed.permute(0, 2, 1)
+        # shape of (sz_b * len_seq, n_embed, 1)
 
-        embed = torch.stack([embed_nn(x) for embed_nn in self.embed_list], dim=-1)  # (N_total, dim, n_embed)
-        embed = embed.permute(0, 2, 1)  # (N_total, n_embed, dim)
-
-        weight = self.attention(embed)            # (N_total, n_embed, 1)
-        weight = F.softmax(weight, dim=-2).squeeze(-1)  # (N_total, n_embed)
-
-        combined = torch.sum(embed * weight.unsqueeze(-1), dim=-2)  # (N_total, dim)
+        weight = self.attention(embed)
+        weight = F.softmax(weight, dim=-2)
+        embed = torch.sum(embed * weight, dim=-2, keepdim=False)
 
         if reshape_flag:
-            combined = combined.view(sz_b, len_seq, -1)  # (batch, tuple_len, dim)
-            weight = weight.view(sz_b, len_seq, -1)      # (batch, tuple_len, n_embed)
+            embed = embed.view(sz_b, len_seq, -1)
 
-        return (combined, weight) if return_weights else combined
+        return embed
 
 
 
